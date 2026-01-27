@@ -18,22 +18,22 @@ Phase 0 - Discovery and Baseline
 Goal: Freeze the current schema and query surface to scope later PRs.
 
 Sub-phase 0.1 - Schema inventory
-- Extract all table definitions from plexpy/__init__.py dbcheck().
-- Record columns, types, defaults, primary keys, and unique constraints.
-- Capture implicit relationships (session_history -> metadata/media_info).
-- Catalog existing indexes (if any) and target indexes for Phase 4.
+- [x] Extract all table definitions from plexpy/__init__.py dbcheck().
+- [x] Record columns, types, defaults, primary keys, and unique constraints.
+- [x] Capture implicit relationships (session_history -> metadata/media_info).
+- [x] Catalog existing indexes (if any) and target indexes for Phase 4.
 
 Sub-phase 0.2 - Query surface inventory
-- Enumerate every raw SQL statement in plexpy/.
-- Map queries to owning module and target table(s).
-- Categorize as read, write, upsert, delete, or schema touch.
-- Identify high-traffic or performance-sensitive queries (history, home stats).
-- Include non-DAL entry points that execute SQL (api2.py api_sql, web auth).
+- [x] Enumerate every raw SQL statement in plexpy/.
+- [x] Map queries to owning module and target table(s).
+- [x] Categorize as read, write, upsert, delete, or schema touch.
+- [x] Identify high-traffic or performance-sensitive queries (history, home stats).
+- [x] Include non-DAL entry points that execute SQL (api2.py api_sql, web auth).
 
 Sub-phase 0.3 - Test harness design
-- Define a new tests/ structure with fixtures for in-memory SQLite.
-- Plan parity tests comparing legacy SQL results to new DAL results.
-- Identify minimal seed datasets that exercise joins, filters, and groupings.
+- [x] Define a new tests/ structure with fixtures for in-memory SQLite.
+- [x] Plan parity tests comparing legacy SQL results to new DAL results.
+- [x] Identify minimal seed datasets that exercise joins, filters, and groupings.
 
 Phase 1 - DAL (Data Access Layer)
 Goal: Introduce a DAL that wraps SQL access without behavior changes.
@@ -45,9 +45,11 @@ Deliverables
 - Tests for each DAL module with parity checks where feasible.
 
 Sub-phase 1.1 - DAL skeleton and error handling
-- Add plexpy/db/__init__.py and plexpy/db/errors.py (or add to exceptions.py).
-- Create a SQLite executor helper that uses MonitorDatabase internally.
-- Provide helper for retries and consistent error wrapping.
+- [x] Add plexpy/db/__init__.py and plexpy/db/errors.py (or add to exceptions.py).
+- [x] Create a SQLite executor helper that uses MonitorDatabase internally.
+- [x] Provide helper for retries and consistent error wrapping.
+- [x] Add tests/conftest.py with in-memory SQLite fixture.
+- [x] Add DAL executor tests with error wrapping.
 
 Sub-phase 1.2 - Per-module DAL migrations (small PRs)
 - PR: users -> DAL + tests
