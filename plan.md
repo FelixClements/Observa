@@ -1,12 +1,12 @@
 Execution Checklist: PostgreSQL + ORM + Containers Only
 
 Phase 1: Cleanup legacy imports
-- Remove modules: `plexpy/plexwatch_import.py`, `plexpy/plexivity_import.py`
-- Update API endpoint imports and logic: `plexpy/webserve.py` (remove PlexWatch/Plexivity paths)
-- Remove template/JS references if any: `data/interfaces/**` (search for import UI)
-- Update docs/API references: `README.md`, `API.md`, `CHANGELOG.md`
-- Success criteria: import endpoints removed; UI has no legacy import entry points
-- Tests: app starts; import endpoints removed without 500s
+- [x] Remove modules: `plexpy/plexwatch_import.py`, `plexpy/plexivity_import.py`
+- [x] Update API endpoint imports and logic: `plexpy/webserve.py` (remove PlexWatch/Plexivity paths)
+- [x] Remove template/JS references if any: `data/interfaces/**` (search for import UI)
+- [x] Update docs/API references: `README.md`, `API.md`, `CHANGELOG.md`
+- [x] Success criteria: import endpoints removed; UI has no legacy import entry points
+- [ ] Tests: app starts; import endpoints removed without 500s
 
 Phase 2: Project organization (no behavior change)
 - Add package directories under `plexpy/`:
@@ -39,11 +39,11 @@ Phase 2: Project organization (no behavior change)
 
 Phase 2.5: Docker-only cleanup + asset relocation
 - Remove non-Docker root folders and workflows:
-  - `snap/`
-  - `init-scripts/`
-  - installer packaging assets in `package/`
-  - `.github/workflows/publish-installers.yml`
-  - `.github/workflows/publish-snap.yml`
+  - [ ] `snap/`
+  - [ ] `init-scripts/`
+  - [ ] installer packaging assets in `package/`
+  - [x] `.github/workflows/publish-installers.yml`
+  - [x] `.github/workflows/publish-snap.yml`
 - Update docs to reflect Docker-only support:
   - `README.md`
   - `CONTRIBUTING.md`
