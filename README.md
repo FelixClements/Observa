@@ -3,8 +3,7 @@
 A python based web application for monitoring, analytics and notifications for 
 [Plex Media Server](https://plex.tv).
 
-This project is based on code from [Headphones](https://github.com/rembo10/headphones)
-and [PlexWatchWeb](https://github.com/ecleese/plexWatchWeb).
+This project is based on code from [Headphones](https://github.com/rembo10/headphones).
 
 ## Features
 

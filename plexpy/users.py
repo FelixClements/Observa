@@ -416,7 +416,7 @@ class Users(object):
                 logger.warn("Tautulli Users :: Unable to retrieve user %s from database. Returning 'Local' user."
                             % user_id if user_id else user)
                 # If there is no user data we must return something
-                # Use "Local" user to retain compatibility with PlexWatch database value
+                # Use "Local" user to retain compatibility with legacy database values
                 return default_return
 
     def get_user_details(self, user_id=None, user=None, email=None, include_last_seen=False):
@@ -777,7 +777,7 @@ class Users(object):
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for undelete: %s." % e)
 
-    # Keep method for PlexWatch/Plexivity import
+    # Keep method for legacy imports
     def get_user_id(self, user=None):
         if user:
             try:

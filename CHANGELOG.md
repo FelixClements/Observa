@@ -11,6 +11,7 @@
   * Fix: Validate image path in /image and /pms_image_proxy endpoints.
   * Fix: Validate image format in /pms_image_proxy endpoint.
   * Fix: Don't run git command with shell.
+  * Change: Remove legacy PlexWatch/Plexivity database import tooling.
 
 
 ## v2.15.3 (2025-08-03)
