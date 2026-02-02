@@ -16,7 +16,7 @@
 import threading
 
 import plexpy
-from plexpy import pmsconnect
+from plexpy.integrations import pmsconnect
 from plexpy.db import sqlite_legacy as database
 from plexpy.integrations import plextv
 from plexpy.services import activity_handler

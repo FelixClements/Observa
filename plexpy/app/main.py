@@ -39,7 +39,7 @@ import tzlocal
 
 import plexpy
 from plexpy.app import bootstrap as _bootstrap
-from plexpy import common
+from plexpy.app import common
 from plexpy.config import core as config
 from plexpy.db import sqlite_legacy as database
 from plexpy.util import helpers
@@ -47,9 +47,9 @@ from plexpy.util import logger
 from plexpy.web import webstart
 
 if common.PLATFORM == 'Windows':
-    from plexpy import windows
+    from plexpy.platform import windows
 elif common.PLATFORM == 'Darwin':
-    from plexpy import macos
+    from plexpy.platform import macos
 
 # Register signals, such as CTRL + C
 signal.signal(signal.SIGINT, plexpy.sig_handler)
@@ -60,6 +60,7 @@ def _sync_bootstrap_globals():
     for key in (
         'PROG_DIR',
         'FULL_PATH',
+        'ASSETS_DIR',
         'ARGS',
         'SYS_PLATFORM',
         'SYS_LANGUAGE',
@@ -98,6 +99,8 @@ def main():
     else:
         plexpy.FULL_PATH = os.path.join(_ROOT_DIR, 'Tautulli.py')
         plexpy.PROG_DIR = _ROOT_DIR
+
+    plexpy.ASSETS_DIR = os.path.join(plexpy.PROG_DIR, 'plexpy', 'web', 'assets')
 
     plexpy.ARGS = sys.argv[1:]
 

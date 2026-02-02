@@ -35,15 +35,15 @@ from apscheduler.triggers.interval import IntervalTrigger
 from ga4mp import GtagMP
 import pytz
 
-from plexpy import common
-from plexpy import datafactory
-from plexpy import exporter
-from plexpy import libraries
-from plexpy import mobile_app
-from plexpy import newsletters
-from plexpy import notifiers
-from plexpy import users
-from plexpy import versioncheck
+from plexpy.app import common
+from plexpy.db import datafactory
+from plexpy.services import exporter
+from plexpy.services import libraries
+from plexpy.services import mobile_app
+from plexpy.services import newsletters
+from plexpy.services import notifiers
+from plexpy.services import users
+from plexpy.services import versioncheck
 from plexpy.config import core as config
 from plexpy.db import sqlite_legacy as database
 from plexpy.integrations import plex
@@ -60,6 +60,7 @@ from plexpy.web import webstart
 
 PROG_DIR = None
 FULL_PATH = None
+ASSETS_DIR = None
 
 ARGS = None
 SIGNAL = None
@@ -365,6 +366,7 @@ def initialize(config_file):
             'DATA_DIR',
             'DB_FILE',
             'PROG_DIR',
+            'ASSETS_DIR',
             'SYS_TIMEZONE',
             'SYS_UTC_OFFSET',
         )

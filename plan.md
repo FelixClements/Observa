@@ -3,7 +3,7 @@ Execution Checklist: PostgreSQL + ORM + Containers Only
 Phase 1: Cleanup legacy imports
 - [x] Remove modules: `plexpy/plexwatch_import.py`, `plexpy/plexivity_import.py`
 - [x] Update API endpoint imports and logic: `plexpy/webserve.py` (remove PlexWatch/Plexivity paths)
-- [x] Remove template/JS references if any: `data/interfaces/**` (search for import UI)
+- [x] Remove template/JS references if any: `plexpy/web/assets/interfaces/**` (search for import UI)
 - [x] Update docs/API references: `README.md`, `API.md`, `CHANGELOG.md`
 - [x] Success criteria: import endpoints removed; UI has no legacy import entry points
 - [X] Tests: app starts; import endpoints removed without 500s
@@ -17,41 +17,65 @@ Phase 2: Project organization (no behavior change)
   - `plexpy/services/`
   - `plexpy/integrations/`
   - `plexpy/util/`
+  - `plexpy/platform/`
 - [x] Move files (no logic changes), update imports:
   - `plexpy/__init__.py` -> `plexpy/app/bootstrap.py` (keep a minimal `plexpy/__init__.py` for globals if needed)
   - `plexpy/webserve.py` -> `plexpy/web/webserve.py`
+  - `plexpy/api2.py` -> `plexpy/web/api2.py`
+  - `plexpy/webauth.py` -> `plexpy/web/webauth.py`
+  - `plexpy/session.py` -> `plexpy/web/session.py`
   - `plexpy/config.py` -> `plexpy/config/core.py`
   - `plexpy/database.py` -> `plexpy/db/sqlite_legacy.py` (temporary until removed)
   - `plexpy/helpers.py` -> `plexpy/util/helpers.py`
   - `plexpy/logger.py` -> `plexpy/util/logger.py`
+  - `plexpy/request.py` -> `plexpy/util/request.py`
+  - `plexpy/lock.py` -> `plexpy/util/lock.py`
+  - `plexpy/exceptions.py` -> `plexpy/util/exceptions.py`
   - `plexpy/webstart.py` -> `plexpy/web/webstart.py`
   - `plexpy/web_socket.py` -> `plexpy/web/web_socket.py`
   - `plexpy/plextv.py` -> `plexpy/integrations/plextv.py`
   - `plexpy/plex.py` -> `plexpy/integrations/plex.py`
+  - `plexpy/pmsconnect.py` -> `plexpy/integrations/pmsconnect.py`
+  - `plexpy/http_handler.py` -> `plexpy/integrations/http_handler.py`
+  - `plexpy/common.py` -> `plexpy/app/common.py`
+  - `plexpy/version.py` -> `plexpy/app/version.py`
   - `plexpy/activity_*` -> `plexpy/services/`
   - `plexpy/notification_*` -> `plexpy/services/`
   - `plexpy/newsletter_*` -> `plexpy/services/`
+  - `plexpy/users.py` -> `plexpy/services/users.py`
+  - `plexpy/libraries.py` -> `plexpy/services/libraries.py`
+  - `plexpy/datafactory.py` -> `plexpy/db/datafactory.py`
+  - `plexpy/datatables.py` -> `plexpy/db/datatables.py`
+  - `plexpy/graphs.py` -> `plexpy/services/graphs.py`
+  - `plexpy/exporter.py` -> `plexpy/services/exporter.py`
+  - `plexpy/log_reader.py` -> `plexpy/services/log_reader.py`
+  - `plexpy/mobile_app.py` -> `plexpy/services/mobile_app.py`
+  - `plexpy/notifiers.py` -> `plexpy/services/notifiers.py`
+  - `plexpy/newsletters.py` -> `plexpy/services/newsletters.py`
+  - `plexpy/versioncheck.py` -> `plexpy/services/versioncheck.py`
+  - `plexpy/macos.py` -> `plexpy/platform/macos.py`
+  - `plexpy/windows.py` -> `plexpy/platform/windows.py`
 - [x] Keep entrypoint shim: `Tautulli.py` -> call `plexpy.app.main`
 - [x] Add backward-compatible import shims or re-export modules for moved files
 - [x] Add architecture doc: `docs/architecture.md`
 - [x] Success criteria: imports resolve with new paths; shims prevent breakage
-- [x] Tests: app starts; core routes/UI load with new import paths
+- [x] Tests: app starts; core routes/UI load with new import paths -> you can test the app by running bash test_start.sh
 
 Phase 2.5: Docker-only cleanup + asset relocation
 - Remove non-Docker root folders and workflows:
-  - [ ] `snap/`
-  - [ ] `init-scripts/`
-  - [ ] installer packaging assets in `package/`
+  - [x] `snap/`
+  - [x] `init-scripts/`
+  - [x] installer packaging assets in `package/`
   - [x] `.github/workflows/publish-installers.yml`
   - [x] `.github/workflows/publish-snap.yml`
 - Update docs to reflect Docker-only support:
-  - `README.md`
-  - `CONTRIBUTING.md`
-  - `CHANGELOG.md`
+  - [x] `README.md`
+  - [x] `CONTRIBUTING.md`
+  - [x] `CHANGELOG.md`
 - Relocate UI assets:
-  - Move `data/` -> `plexpy/web/assets/`
-  - Update asset paths in templates/JS/Python
-  - Update Dockerfile/runtime paths that reference `/app/data`
+  - [x] Move `data/` -> `plexpy/web/assets/`
+  - [x] Update asset paths in templates/JS/Python
+  - [x] Update Dockerfile/runtime paths that reference `/app/data`
 - Success criteria: assets load from new root; Docker image runs without old paths
 - Tests: Docker build succeeds; UI assets served from new paths
 
@@ -163,7 +187,7 @@ Phase 10: Linux-only runtime + de-vendor libs (Docker builds)
     - `plexpy/__init__.py` (tray globals, platform-specific restart/alerts)
     - `plexpy/notification_handler.py` (update assets for .exe/.pkg)
     - `plexpy/notifiers.py` (remove OSX notifier agent)
-  - Update update-bar messaging in `data/interfaces/default/base.html` for Docker-only installs
+  - Update update-bar messaging in `plexpy/web/assets/interfaces/default/base.html` for Docker-only installs
 - Remove Windows/macOS/Snap packaging assets (if not already removed in Phase 2.5/8):
   - `snap/`, `package/`, `init-scripts/init.osx`, `contrib/clean_pyc.bat`
   - `.github/workflows/publish-snap.yml`, `.github/workflows/publish-installers.yml`, `.github/workflows/submit-winget.yml`

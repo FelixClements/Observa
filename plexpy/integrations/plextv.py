@@ -19,11 +19,11 @@ import json
 from urllib.parse import unquote
 
 import plexpy
-from plexpy import common
-from plexpy import http_handler
-from plexpy import users
-from plexpy import pmsconnect
-from plexpy import session
+from plexpy.app import common
+from plexpy.integrations import http_handler
+from plexpy.integrations import pmsconnect
+from plexpy.services import users
+from plexpy.web import session
 from plexpy.integrations.plex import Plex
 from plexpy.util import helpers
 from plexpy.util import logger

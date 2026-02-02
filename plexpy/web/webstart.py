@@ -24,7 +24,7 @@ import cherrypy
 import cherrypy_cors
 
 import plexpy
-from plexpy import webauth
+from plexpy.web import webauth
 from plexpy.util import logger
 from plexpy.util.helpers import create_https_certificates
 from plexpy.web.webserve import WebInterface, BaseRedirect
@@ -156,7 +156,7 @@ def initialize(options):
     conf = {
         '/': {
             'engine.timeout_monitor.on': False,
-            'tools.staticdir.root': os.path.join(plexpy.PROG_DIR, 'data'),
+            'tools.staticdir.root': plexpy.ASSETS_DIR,
             'tools.proxy.on': bool(options['http_proxy']),
             'tools.gzip.on': True,
             'tools.gzip.mime_types': ['text/html', 'text/plain', 'text/css',
@@ -259,7 +259,7 @@ def initialize(options):
         '/favicon.ico': {
             'tools.staticfile.on': True,
             'tools.staticfile.filename': os.path.abspath(os.path.join(
-                plexpy.PROG_DIR, 'data/interfaces/default/images/favicon/favicon.ico')),
+                plexpy.ASSETS_DIR, 'interfaces/default/images/favicon/favicon.ico')),
             'tools.caching.on': True,
             'tools.caching.force': True,
             'tools.caching.delay': 0,

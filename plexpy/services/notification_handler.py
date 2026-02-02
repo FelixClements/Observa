@@ -32,11 +32,11 @@ import arrow
 import musicbrainzngs
 
 import plexpy
-from plexpy import common
-from plexpy import datafactory
-from plexpy import notifiers
-from plexpy import pmsconnect
-from plexpy import request
+from plexpy.app import common
+from plexpy.db import datafactory
+from plexpy.integrations import pmsconnect
+from plexpy.services import notifiers
+from plexpy.util import request
 from plexpy.db import sqlite_legacy as database
 from plexpy.services import activity_processor
 from plexpy.services.newsletter_handler import notify as notify_newsletter

@@ -23,7 +23,7 @@ from apscheduler.triggers.cron import CronTrigger
 import email.utils
 
 import plexpy
-from plexpy import newsletters
+from plexpy.services import newsletters
 from plexpy.db import sqlite_legacy as database
 from plexpy.util import helpers
 from plexpy.util import logger

@@ -17,9 +17,9 @@ from collections import defaultdict
 import json
 
 import plexpy
-from plexpy import libraries
-from plexpy import pmsconnect
-from plexpy import users
+from plexpy.integrations import pmsconnect
+from plexpy.services import libraries
+from plexpy.services import users
 from plexpy.db import sqlite_legacy as database
 from plexpy.util import helpers
 from plexpy.util import logger

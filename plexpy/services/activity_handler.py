@@ -21,9 +21,9 @@ from apscheduler.triggers.date import DateTrigger
 import pytz
 
 import plexpy
-from plexpy import common
-from plexpy import datafactory
-from plexpy import pmsconnect
+from plexpy.app import common
+from plexpy.db import datafactory
+from plexpy.integrations import pmsconnect
 from plexpy.services import activity_processor
 from plexpy.services import notification_handler
 from plexpy.util import helpers

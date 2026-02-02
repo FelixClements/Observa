@@ -47,10 +47,10 @@ from xml.dom import minidom
 import xmltodict
 
 import plexpy
-from plexpy import common
+from plexpy.app import common
 from plexpy.util import logger
-from plexpy import request
-from plexpy.api2 import API2
+from plexpy.util import request
+from plexpy.web.api2 import API2
 
 
 def addtoapi(*dargs, **dkwargs):

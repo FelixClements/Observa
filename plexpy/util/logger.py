@@ -26,7 +26,7 @@ import threading
 import traceback
 
 import plexpy
-from plexpy import users
+from plexpy.services import users
 from plexpy.config.core import _BLACKLIST_KEYS, _WHITELIST_KEYS
 from plexpy.util import helpers
 

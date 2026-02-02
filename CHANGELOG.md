@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+* Other:
+  * Change: Docker-only distribution. Removed Snap/installer packaging assets and relocated UI assets to `plexpy/web/assets`.
+
 ## v2.16.0 (2025-09-08)
 
 * Important Note!

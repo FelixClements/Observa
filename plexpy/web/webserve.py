@@ -44,19 +44,19 @@ if sys.version_info >= (3, 6):
     import secrets
 
 import plexpy
-from plexpy import common
-from plexpy import datafactory
-from plexpy import exporter
-from plexpy import graphs
-from plexpy import http_handler
-from plexpy import libraries
-from plexpy import log_reader
-from plexpy import newsletters
-from plexpy import mobile_app
-from plexpy import notifiers
-from plexpy import pmsconnect
-from plexpy import users
-from plexpy import versioncheck
+from plexpy.app import common
+from plexpy.db import datafactory
+from plexpy.integrations import http_handler
+from plexpy.integrations import pmsconnect
+from plexpy.services import exporter
+from plexpy.services import graphs
+from plexpy.services import libraries
+from plexpy.services import log_reader
+from plexpy.services import newsletters
+from plexpy.services import mobile_app
+from plexpy.services import notifiers
+from plexpy.services import users
+from plexpy.services import versioncheck
 from plexpy.config import core as config
 from plexpy.db import sqlite_legacy as database
 from plexpy.integrations import plextv
@@ -68,14 +68,14 @@ from plexpy.util import helpers
 from plexpy.util import logger
 from plexpy.web import web_socket
 from plexpy.web import webstart
-from plexpy.api2 import API2
+from plexpy.web.api2 import API2
 from plexpy.util.helpers import checked, addtoapi, get_ip, create_https_certificates, build_datatables_json, sanitize_out
-from plexpy.session import get_session_info, get_session_user_id, allow_session_user, allow_session_library
-from plexpy.webauth import AuthController, requireAuth, member_of, check_auth, get_jwt_token
+from plexpy.web.session import get_session_info, get_session_user_id, allow_session_user, allow_session_library
+from plexpy.web.webauth import AuthController, requireAuth, member_of, check_auth, get_jwt_token
 if common.PLATFORM == 'Windows':
-    from plexpy import windows
+    from plexpy.platform import windows
 elif common.PLATFORM == 'Darwin':
-    from plexpy import macos
+    from plexpy.platform import macos
 
 
 TEMPLATE_LOOKUP = None
@@ -84,8 +84,8 @@ TEMPLATE_LOOKUP = None
 def serve_template(template_name, **kwargs):
     global TEMPLATE_LOOKUP
     if TEMPLATE_LOOKUP is None:
-        interface_dir = os.path.join(str(plexpy.PROG_DIR), 'data/interfaces/')
-        template_dir = os.path.join(str(interface_dir), plexpy.CONFIG.INTERFACE)
+        interface_dir = os.path.join(plexpy.ASSETS_DIR, 'interfaces')
+        template_dir = os.path.join(interface_dir, plexpy.CONFIG.INTERFACE)
         TEMPLATE_LOOKUP = TemplateLookup(directories=[template_dir], default_filters=['unicode', 'h'],
                             error_handler=mako_error_handler)
 
@@ -153,7 +153,7 @@ class WebInterface(object):
     auth = AuthController()
 
     def __init__(self):
-        self.interface_dir = os.path.join(str(plexpy.PROG_DIR), 'data/')
+        self.interface_dir = plexpy.ASSETS_DIR
 
     @cherrypy.expose
     @requireAuth()
@@ -4218,7 +4218,7 @@ class WebInterface(object):
                       'update': True,
                       'release': True,
                       'message': 'A new release (%s) of Tautulli is available.' % plexpy.LATEST_RELEASE,
-                      'current_release': plexpy.common.RELEASE,
+                      'current_release': common.RELEASE,
                       'latest_release': plexpy.LATEST_RELEASE,
                       'release_url': helpers.anon_url(
                           'https://github.com/%s/%s/releases/tag/%s'
@@ -4710,8 +4710,8 @@ class WebInterface(object):
         cherrypy.response.headers['Cache-Control'] = 'max-age=2592000'  # 30 days
 
         if isinstance(img, str) and img.startswith('interfaces/default/images'):
-            resource_dir = os.path.join(plexpy.PROG_DIR, 'data/interfaces/default/images')
-            img_path = os.path.join(plexpy.PROG_DIR, 'data', img)
+            resource_dir = os.path.join(plexpy.ASSETS_DIR, 'interfaces', 'default', 'images')
+            img_path = os.path.join(plexpy.ASSETS_DIR, img)
             if not helpers.is_subdir(img_path, resource_dir):
                 return
 
@@ -4725,7 +4725,7 @@ class WebInterface(object):
         if not img and not rating_key:
             if fallback in common.DEFAULT_IMAGES:
                 fbi = common.DEFAULT_IMAGES[fallback]
-                fp = os.path.join(plexpy.PROG_DIR, 'data', fbi)
+                fp = os.path.join(plexpy.ASSETS_DIR, fbi)
                 return serve_file(path=fp, content_type='image/png')
             logger.warn('No image input received.')
             return
@@ -4806,7 +4806,7 @@ class WebInterface(object):
                 cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
                 if fallback in common.DEFAULT_IMAGES:
                     fbi = common.DEFAULT_IMAGES[fallback]
-                    fp = os.path.join(plexpy.PROG_DIR, 'data', fbi)
+                    fp = os.path.join(plexpy.ASSETS_DIR, fbi)
                     return serve_file(path=fp, content_type='image/png')
                 elif fallback:
                     return self.real_pms_image_proxy(
@@ -4820,7 +4820,7 @@ class WebInterface(object):
             cherrypy.response.headers['Cache-Control'] = 'max-age=3600'  # 1 hour
 
             if len(args) >= 2 and args[0] == 'images':
-                resource_dir = os.path.join(plexpy.PROG_DIR, 'data/interfaces/default')
+                resource_dir = os.path.join(plexpy.ASSETS_DIR, 'interfaces', 'default')
                 img_path = os.path.join(resource_dir, *args)
                 if not helpers.is_subdir(img_path, resource_dir):
                     return
@@ -4834,7 +4834,7 @@ class WebInterface(object):
 
             if img_hash in common.DEFAULT_IMAGES:
                 fbi = common.DEFAULT_IMAGES[img_hash]
-                fp = os.path.join(plexpy.PROG_DIR, 'data', fbi)
+                fp = os.path.join(plexpy.ASSETS_DIR, fbi)
                 return serve_file(path=fp, content_type='image/png')
 
             img_info = notification_handler.get_hash_image_info(img_hash=img_hash)
@@ -6774,7 +6774,7 @@ class WebInterface(object):
             # Keep this for backwards compatibility for images through /newsletter/image
             if len(args) >= 2 and args[0] == 'image':
                 if args[1] == 'images':
-                    resource_dir = os.path.join(str(plexpy.PROG_DIR), 'data/interfaces/default/')
+                    resource_dir = os.path.join(plexpy.ASSETS_DIR, 'interfaces', 'default')
                     try:
                         return serve_file(path=os.path.join(resource_dir, *args[1:]), content_type='image/png')
                     except NotFound:
