@@ -28,15 +28,20 @@ DOCUMENTATION :: END
     <tbody>
         % for job, job_type in common.SCHEDULER_LIST.items():
         <%
-            sched_job = plexpy.SCHED.get_job(job)
+            sched_job = plexpy.SCHED.get_job(job) if plexpy.SCHED else None
         %>
         % if sched_job:
         <tr>
             <td>${sched_job.id}</td>
             <td><i class="fa fa-sm fa-fw fa-check"></i> Active</td>
             <td>${helpers.format_timedelta_Hms(sched_job.trigger.interval)}</td>
+            % if sched_job.next_run_time:
             <td>${helpers.format_timedelta_Hms(sched_job.next_run_time - datetime.datetime.now(sched_job.next_run_time.tzinfo))}</td>
             <td>${sched_job.next_run_time.astimezone(plexpy.SYS_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}</td>
+            % else:
+            <td>N/A</td>
+            <td>N/A</td>
+            % endif
         </tr>
         % elif job_type == 'websocket' and plexpy.WS_CONNECTED:
         <tr>

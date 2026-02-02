@@ -14,7 +14,7 @@
         title_key = title_format.format('Rating Key', 'Title')
         description  = 'Queue to flush recently added items to the database and send notifications if enabled.'
 
-    scheduled_jobs = [j.id for j in activity_handler.ACTIVITY_SCHED.get_jobs() if j.id.startswith(filter_key)]
+    scheduled_jobs = [j.id for j in activity_handler.ACTIVITY_SCHED.get_jobs() if j.id.startswith(filter_key)] if activity_handler.ACTIVITY_SCHED else []
 %>
 <div class="modal-dialog" role="document">
     <div class="modal-content">
@@ -44,13 +44,18 @@
                     % if scheduled_jobs:
                     % for job in scheduled_jobs:
                     <%
-                        sched_job = activity_handler.ACTIVITY_SCHED.get_job(job)
-                        now = datetime.datetime.now(sched_job.next_run_time.tzinfo)
+                        sched_job = activity_handler.ACTIVITY_SCHED.get_job(job) if activity_handler.ACTIVITY_SCHED else None
+                        now = datetime.datetime.now(sched_job.next_run_time.tzinfo) if sched_job and sched_job.next_run_time else None
                     %>
                     <tr>
                         <td><strong>${title_format.format(*sched_job.args)}</strong></td>
+                        % if sched_job and sched_job.next_run_time and now:
                         <td>${helpers.format_timedelta_Hms(sched_job.next_run_time - now)}</td>
                         <td>${sched_job.next_run_time.astimezone(plexpy.SYS_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}</td>
+                        % else:
+                        <td>N/A</td>
+                        <td>N/A</td>
+                        % endif
                     </tr>
                     % endfor
                     % else:

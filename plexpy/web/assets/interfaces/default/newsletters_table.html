@@ -21,7 +21,7 @@ DOCUMENTATION :: END
             ${newsletter['agent_label']} &nbsp;<span class="friendly_name">(${newsletter['id']})</span>
             % endif
             <span class="toggle-right friendly_name">
-                % if newsletter_handler.NEWSLETTER_SCHED.get_job('newsletter-{}'.format(newsletter['id'])):
+                % if newsletter_handler.NEWSLETTER_SCHED and newsletter_handler.NEWSLETTER_SCHED.get_job('newsletter-{}'.format(newsletter['id'])):
                 <% job = newsletter_handler.NEWSLETTER_SCHED.get_job('newsletter-{}'.format(newsletter['id'])) %>
                 <span id="newsletter-next_run-${newsletter['id']}">
                     <script>
