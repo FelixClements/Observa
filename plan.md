@@ -80,13 +80,13 @@ Phase 2.5: Docker-only cleanup + asset relocation
 - Tests: Docker build succeeds; UI assets served from new paths
 
 Phase 2.6: UI templates + static asset wiring
-- Update CherryPy static mounts to new asset root:
+- [x] Update CherryPy static mounts to new asset root:
   - `plexpy/web/webstart.py` (paths for `/css`, `/js`, `/images`, `/fonts`, `/interfaces`)
-- Update Mako template asset URLs:
+- [x] Update Mako template asset URLs:
   - `plexpy/web/assets/interfaces/default/base.html` (CSS/JS/image includes)
-- Confirm template lookup path for interfaces:
+- [x] Confirm template lookup path for interfaces:
   - `plexpy/web/webserve.py` (TemplateLookup root)
-- Success criteria: template lookup uses new root; assets resolve under new URLs
+- [x] Success criteria: template lookup uses new root; assets resolve under new URLs
 - Tests: login page renders; CSS/JS/images load without 404s
 
 Phase 3: ORM 2.0 foundation
