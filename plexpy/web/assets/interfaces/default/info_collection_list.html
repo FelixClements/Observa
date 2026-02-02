@@ -28,8 +28,8 @@ DOCUMENTATION :: END
 
 % if data != None:
 <%
-    from plexpy.common import MEDIA_TYPE_HEADERS
-    from plexpy.helpers import page
+    from plexpy.app.common import MEDIA_TYPE_HEADERS
+    from plexpy.util.helpers import page
     types = ('movie', 'show', 'artist', 'album')
 %>
 % for media_type in types:

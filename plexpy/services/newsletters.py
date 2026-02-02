@@ -460,7 +460,7 @@ class Newsletter(object):
         self.retrieve_data()
 
         # Convert CustomArrow to string
-        from plexpy.notification_handler import CustomArrow
+        from plexpy.services.notification_handler import CustomArrow
         parameters = {k: str(v) if isinstance(v, CustomArrow) else v for k, v in self.parameters.items()}
 
         return {'title': self.NAME,
@@ -590,7 +590,7 @@ class Newsletter(object):
         return parameters
 
     def _build_params(self):
-        from plexpy.notification_handler import CustomArrow
+        from plexpy.services.notification_handler import CustomArrow
         
         date_format = helpers.momentjs_to_arrow(plexpy.CONFIG.DATE_FORMAT)
 
@@ -625,7 +625,7 @@ class Newsletter(object):
         return parameters
 
     def build_text(self):
-        from plexpy.notification_handler import CustomFormatter
+        from plexpy.services.notification_handler import CustomFormatter
         custom_formatter = CustomFormatter()
 
         try:
@@ -658,7 +658,7 @@ class Newsletter(object):
         return subject, body, message
 
     def build_filename(self):
-        from plexpy.notification_handler import CustomFormatter
+        from plexpy.services.notification_handler import CustomFormatter
         custom_formatter = CustomFormatter()
 
         try:
@@ -705,7 +705,7 @@ class RecentlyAdded(Newsletter):
     _TEMPLATE = 'recently_added.html'
 
     def _get_recently_added(self, media_type=None):
-        from plexpy.notification_handler import format_group_index
+        from plexpy.services.notification_handler import format_group_index
 
         pms_connect = pmsconnect.PmsConnect()
 
@@ -830,7 +830,7 @@ class RecentlyAdded(Newsletter):
         return recently_added
 
     def retrieve_data(self):
-        from plexpy.notification_handler import get_img_info, set_hash_image_info
+        from plexpy.services.notification_handler import get_img_info, set_hash_image_info
 
         if not self.config['incl_libraries']:
             logger.warn("Tautulli Newsletters :: Failed to retrieve %s newsletter data: no libraries selected." % self.NAME)

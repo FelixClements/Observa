@@ -1,7 +1,8 @@
 <%
     import datetime
     import plexpy
-    from plexpy import activity_handler, helpers
+    from plexpy.services import activity_handler
+    from plexpy.util import helpers
 
     if queue == 'active sessions':
         filter_key = 'session_key-'

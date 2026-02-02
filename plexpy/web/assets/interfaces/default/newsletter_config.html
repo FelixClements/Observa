@@ -1,8 +1,8 @@
 % if newsletter:
 <%!
     import json
-    from plexpy import notifiers
-    from plexpy.helpers import anon_url, checked
+    from plexpy.services import notifiers
+    from plexpy.util.helpers import anon_url, checked
 
     all_notifiers = sorted(notifiers.get_notifiers(), key=lambda k: (k['agent_label'].lower(), k['friendly_name'], k['id']))
     email_notifiers = [n for n in all_notifiers if n['agent_name'] == 'email']

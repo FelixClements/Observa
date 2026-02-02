@@ -4,8 +4,9 @@
     import sys
 
     import plexpy
-    from plexpy import common, notifiers, newsletters
-    from plexpy.helpers import anon_url, checked
+    from plexpy.app import common
+    from plexpy.services import notifiers, newsletters
+    from plexpy.util.helpers import anon_url, checked
 
     docker_setting = 'disabled' if plexpy.DOCKER else ''
     docker_msg = '<span class="setting-message small">(Controlled by Docker Container)</span>' if plexpy.DOCKER else ''
@@ -538,7 +539,7 @@
                             tray = {'Windows': 'System Tray', 'Darwin': 'Menu Bar'}
                             tray_disabled = tray_disabled_msg = ''
                             if common.PLATFORM == 'Darwin':
-                                from plexpy.macos import HAS_PYOBJC
+                                from plexpy.platform.macos import HAS_PYOBJC
                                 if not HAS_PYOBJC:
                                     tray_disabled = 'disabled'
                                     tray_disabled_msg = '<span class="setting-message small">(Missing pyobjc module)</span>'

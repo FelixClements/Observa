@@ -36,8 +36,8 @@ DOCUMENTATION :: END
 <%def name="body()">
 % if data:
 <%
-    from plexpy.common import LIVE_TV_SECTION_ID
-    from plexpy.helpers import page
+    from plexpy.app.common import LIVE_TV_SECTION_ID
+    from plexpy.util.helpers import page
 %>
 <div class="container-fluid">
     <div class="row">
@@ -536,7 +536,7 @@ DOCUMENTATION :: END
 <script src="${http_root}js/dataTables.bootstrap.min.js"></script>
 <script src="${http_root}js/dataTables.bootstrap.pagination.js"></script>
 % if data:
-<% from plexpy.common import LIVE_TV_SECTION_ID %>
+<% from plexpy.app.common import LIVE_TV_SECTION_ID %>
 <%
     history_user_id = '' if _session['user_group'] == 'admin' else _session['user_id']
 %>

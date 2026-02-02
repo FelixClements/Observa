@@ -1,8 +1,8 @@
 % if notifier:
 <%
     import json
-    from plexpy import notifiers, users
-    from plexpy.helpers import checked
+    from plexpy.services import notifiers, users
+    from plexpy.util.helpers import checked
     available_notification_actions = notifiers.available_notification_actions(agent_id=notifier['agent_id'])
 
     user_emails = [{'user': u['friendly_name'] or u['username'], 'email': u['email']} for u in users.Users().get_users() if u['email']]

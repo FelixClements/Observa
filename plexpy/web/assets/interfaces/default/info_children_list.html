@@ -28,7 +28,7 @@ DOCUMENTATION :: END
 
 % if data != None:
 <%
-    from plexpy.helpers import cast_to_int, page, short_season
+    from plexpy.util.helpers import cast_to_int, page, short_season
 %>
 % if data['children_count'] > 0:
 <div class="item-children-wrapper">
@@ -311,4 +311,3 @@ DOCUMENTATION :: END
 </script>
 % endif
 % endif
-

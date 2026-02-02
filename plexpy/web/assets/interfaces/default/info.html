@@ -41,9 +41,9 @@ DOCUMENTATION :: END
     from collections import defaultdict
     import re
 
-    from plexpy import notifiers
-    from plexpy.common import MEDIA_TYPE_HEADERS, MEDIA_FLAGS_AUDIO, MEDIA_FLAGS_VIDEO
-    from plexpy.helpers import page, get_percent, cast_to_int, short_season
+    from plexpy.services import notifiers
+    from plexpy.app.common import MEDIA_TYPE_HEADERS, MEDIA_FLAGS_AUDIO, MEDIA_FLAGS_VIDEO
+    from plexpy.util.helpers import page, get_percent, cast_to_int, short_season
 
     # Get audio codec file
     def af(codec):

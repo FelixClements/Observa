@@ -307,7 +307,7 @@ class AuthController(object):
         logger.debug("Tautulli WebAuth :: %s user '%s' logged out of Tautulli." % (user_group.capitalize(), username))
 
     def get_loginform(self, redirect_uri=''):
-        from plexpy.webserve import serve_template
+        from plexpy.web.webserve import serve_template
         return serve_template(template_name="login.html", title="Login", redirect_uri=unquote(redirect_uri))
 
     @cherrypy.expose
