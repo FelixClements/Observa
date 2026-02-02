@@ -19,13 +19,13 @@ import json
 
 import plexpy
 from plexpy import common
-from plexpy import database
 from plexpy import datatables
-from plexpy import helpers
-from plexpy import logger
 from plexpy import pmsconnect
 from plexpy import session
 from plexpy import users
+from plexpy.db import sqlite_legacy as database
+from plexpy.util import helpers
+from plexpy.util import logger
 
 # Temporarily store update_metadata row ids in memory to prevent rating_key collisions
 _UPDATE_METADATA_IDS = {

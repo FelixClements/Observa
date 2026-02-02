@@ -22,15 +22,15 @@ from urllib.parse import quote, quote_plus, urlencode
 from xml.dom.minidom import Node
 
 import plexpy
-from plexpy import activity_processor
 from plexpy import common
-from plexpy import helpers
 from plexpy import http_handler
 from plexpy import libraries
-from plexpy import logger
-from plexpy import plextv
 from plexpy import session
 from plexpy import users
+from plexpy.integrations import plextv
+from plexpy.services import activity_processor
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 def get_server_friendly_name():

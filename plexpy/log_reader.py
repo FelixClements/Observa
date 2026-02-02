@@ -20,8 +20,8 @@ from io import open
 import os
 
 import plexpy
-from plexpy import helpers
-from plexpy import logger
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 def list_plex_logs():

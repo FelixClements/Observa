@@ -30,7 +30,7 @@ newsletters/*
 *.mmdb
 version.txt
 branch.txt
-.TEST
+TEST/*
 
 # HTTPS Cert/Key #
 ##################

@@ -27,12 +27,12 @@ from io import open
 from multiprocessing.dummy import Pool as ThreadPool
 
 import plexpy
-from plexpy import database
 from plexpy import datatables
-from plexpy import helpers
-from plexpy import logger
 from plexpy import users
-from plexpy.plex import Plex
+from plexpy.db import sqlite_legacy as database
+from plexpy.integrations.plex import Plex
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 class Export(object):

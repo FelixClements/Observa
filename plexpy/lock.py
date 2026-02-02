@@ -20,7 +20,7 @@ import time
 import threading
 
 import plexpy
-from plexpy import logger
+from plexpy.util import logger
 
 
 class TimedLock(object):

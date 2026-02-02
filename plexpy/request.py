@@ -24,7 +24,7 @@ from requests.packages import urllib3
 
 import plexpy
 from plexpy import lock
-from plexpy import logger
+from plexpy.util import logger
 
 
 # Dictionary with last request times, for rate limiting.

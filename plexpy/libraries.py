@@ -20,15 +20,15 @@ import os
 
 import plexpy
 from plexpy import common
-from plexpy import database
 from plexpy import datatables
-from plexpy import helpers
-from plexpy import logger
-from plexpy import plextv
 from plexpy import pmsconnect
 from plexpy import session
 from plexpy import users
-from plexpy.plex import Plex
+from plexpy.db import sqlite_legacy as database
+from plexpy.integrations import plextv
+from plexpy.integrations.plex import Plex
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 def refresh_libraries():

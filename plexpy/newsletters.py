@@ -27,12 +27,12 @@ from mako import exceptions
 
 import plexpy
 from plexpy import common
-from plexpy import database
-from plexpy import helpers
 from plexpy import libraries
-from plexpy import logger
-from plexpy import newsletter_handler
 from plexpy import pmsconnect
+from plexpy.db import sqlite_legacy as database
+from plexpy.services import newsletter_handler
+from plexpy.util import helpers
+from plexpy.util import logger
 from plexpy.notifiers import send_notification, EMAIL
 
 

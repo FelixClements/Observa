@@ -22,13 +22,13 @@ import httpagentparser
 
 import plexpy
 from plexpy import common
-from plexpy import database
 from plexpy import datatables
-from plexpy import helpers
 from plexpy import libraries
-from plexpy import logger
-from plexpy import plextv
 from plexpy import session
+from plexpy.db import sqlite_legacy as database
+from plexpy.integrations import plextv
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 def refresh_users():

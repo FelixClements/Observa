@@ -28,11 +28,11 @@ from hashing_passwords import check_hash
 import jwt
 
 import plexpy
-from plexpy import logger
-from plexpy.database import MonitorDatabase
-from plexpy.helpers import timestamp
+from plexpy.db.sqlite_legacy import MonitorDatabase
+from plexpy.integrations.plextv import PlexTV
 from plexpy.users import Users, refresh_users
-from plexpy.plextv import PlexTV
+from plexpy.util import logger
+from plexpy.util.helpers import timestamp
 
 # Monkey patch SameSite support into cookies.
 # https://stackoverflow.com/a/50813092

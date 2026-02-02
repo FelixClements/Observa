@@ -6,10 +6,10 @@ Phase 1: Cleanup legacy imports
 - [x] Remove template/JS references if any: `data/interfaces/**` (search for import UI)
 - [x] Update docs/API references: `README.md`, `API.md`, `CHANGELOG.md`
 - [x] Success criteria: import endpoints removed; UI has no legacy import entry points
-- [ ] Tests: app starts; import endpoints removed without 500s
+- [X] Tests: app starts; import endpoints removed without 500s
 
 Phase 2: Project organization (no behavior change)
-- Add package directories under `plexpy/`:
+- [x] Add package directories under `plexpy/`:
   - `plexpy/app/`
   - `plexpy/config/`
   - `plexpy/db/`
@@ -17,7 +17,7 @@ Phase 2: Project organization (no behavior change)
   - `plexpy/services/`
   - `plexpy/integrations/`
   - `plexpy/util/`
-- Move files (no logic changes), update imports:
+- [x] Move files (no logic changes), update imports:
   - `plexpy/__init__.py` -> `plexpy/app/bootstrap.py` (keep a minimal `plexpy/__init__.py` for globals if needed)
   - `plexpy/webserve.py` -> `plexpy/web/webserve.py`
   - `plexpy/config.py` -> `plexpy/config/core.py`
@@ -31,11 +31,11 @@ Phase 2: Project organization (no behavior change)
   - `plexpy/activity_*` -> `plexpy/services/`
   - `plexpy/notification_*` -> `plexpy/services/`
   - `plexpy/newsletter_*` -> `plexpy/services/`
-- Keep entrypoint shim: `Tautulli.py` -> call `plexpy.app.main`
-- Add backward-compatible import shims or re-export modules for moved files
-- Add architecture doc: `docs/architecture.md`
-- Success criteria: imports resolve with new paths; shims prevent breakage
-- Tests: app starts; core routes/UI load with new import paths
+- [x] Keep entrypoint shim: `Tautulli.py` -> call `plexpy.app.main`
+- [x] Add backward-compatible import shims or re-export modules for moved files
+- [x] Add architecture doc: `docs/architecture.md`
+- [x] Success criteria: imports resolve with new paths; shims prevent breakage
+- [x] Tests: app starts; core routes/UI load with new import paths
 
 Phase 2.5: Docker-only cleanup + asset relocation
 - Remove non-Docker root folders and workflows:

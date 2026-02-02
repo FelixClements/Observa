@@ -32,8 +32,8 @@ if HAS_PYOBJC:
 
 import plexpy
 from plexpy import common
-from plexpy import logger
 from plexpy import versioncheck
+from plexpy.util import logger
 
 
 class MacOSSystemTray(object):

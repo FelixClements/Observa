@@ -18,9 +18,9 @@
 import requests
 import threading
 
-from plexpy import database
-from plexpy import helpers
-from plexpy import logger
+from plexpy.db import sqlite_legacy as database
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 _ONESIGNAL_APP_ID = '3b4b666a-d557-4b92-acdf-e2c8c4b95357'

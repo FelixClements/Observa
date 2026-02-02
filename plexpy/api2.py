@@ -32,18 +32,18 @@ import xmltodict
 
 import plexpy
 from plexpy import common
-from plexpy import config
-from plexpy import database
-from plexpy import helpers
 from plexpy import libraries
-from plexpy import logger
 from plexpy import mobile_app
-from plexpy import notification_handler
 from plexpy import notifiers
-from plexpy import newsletter_handler
 from plexpy import newsletters
-from plexpy import plextv
 from plexpy import users
+from plexpy.config import core as config
+from plexpy.db import sqlite_legacy as database
+from plexpy.integrations import plextv
+from plexpy.services import newsletter_handler
+from plexpy.services import notification_handler
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 class API2(object):

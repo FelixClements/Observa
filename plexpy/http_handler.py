@@ -23,8 +23,8 @@ import requests
 import urllib3
 
 import plexpy
-from plexpy import helpers
-from plexpy import logger
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 class HTTPHandler(object):

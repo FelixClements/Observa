@@ -25,9 +25,9 @@ import tarfile
 
 import plexpy
 from plexpy import common
-from plexpy import helpers
-from plexpy import logger
 from plexpy import request
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 def runGit(args):

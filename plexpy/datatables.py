@@ -16,9 +16,9 @@
 import re
 
 import plexpy
-from plexpy import database
-from plexpy import helpers
-from plexpy import logger
+from plexpy.db import sqlite_legacy as database
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 class DataTables(object):

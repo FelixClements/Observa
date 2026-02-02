@@ -51,13 +51,13 @@ import twitter
 
 import plexpy
 from plexpy import common
-from plexpy import database
-from plexpy import helpers
-from plexpy import logger
 from plexpy import mobile_app
 from plexpy import pmsconnect
 from plexpy import request
 from plexpy import users
+from plexpy.db import sqlite_legacy as database
+from plexpy.util import helpers
+from plexpy.util import logger
 
 
 BROWSER_NOTIFIERS = {}
