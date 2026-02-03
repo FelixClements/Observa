@@ -103,6 +103,13 @@ Phase 3: ORM 2.0 foundation
   - UTC timezone handling; explicit sequence behavior for integer PKs
 - Add config keys for Postgres connection:
   - `plexpy/config/core.py`
+- Phase 3 completion plan (SQLite is source of truth):
+  - [x] Ensure SQLAlchemy 2.x is pinned in `requirements.txt`
+  - [x] Build a schema comparison test that:
+    - Creates a SQLite in-memory DB using the CREATE TABLE SQL in `plexpy/app/bootstrap.py`
+    - Introspects table/column/PK/index definitions via SQLAlchemy inspector
+    - Compares against ORM metadata and reports mismatches (names, nullability, defaults, indexes)
+  - [x] Add a Postgres smoke test that creates the ORM metadata and verifies engine/session
 - Success criteria: models map to current schema without destructive diffs
 - Tests: engine/session creation works; model metadata loads
 

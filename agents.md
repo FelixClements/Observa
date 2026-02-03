@@ -28,6 +28,14 @@ No documented build or test commands in this repo. Ask before introducing new to
 - Be concise, specific, and value dense in docs
 - Add comments only when necessary to clarify non-obvious logic
 
+## Local PostgreSQL 16 (Ubuntu, apt, local-only)
+- Script: `postgres16-setup.sh` (adds PGDG repo, installs Postgres 16, creates `devuser`/`devdb`, verifies)
+- Service check:
+  - systemd hosts: `sudo systemctl status postgresql --no-pager`
+  - containers without systemd: `sudo service postgresql status` (or `sudo service postgresql start`)
+- Default connection string: `postgresql://devuser:devpass@localhost:5432/devdb`
+- Quick verify: `psql "postgresql://devuser:devpass@localhost:5432/devdb" -c "SELECT version();"`
+
 ## Boundaries
 - ✅ **Always do:** Keep changes scoped; update docs when behavior changes
 - ⚠️ **Ask first:** Before large refactors, removing platform support, or changing runtime requirements

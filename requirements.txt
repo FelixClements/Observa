@@ -34,11 +34,13 @@ pyparsing==3.2.0
 python-dateutil==2.9.0.post0
 python-twitter==3.5
 pytz==2024.2
+psycopg[binary]==3.2.4
 requests==2.32.4
 requests-oauthlib==2.0.0
 rumps==0.4.0; platform_system == "Darwin"
 simplejson==3.19.3
 six==1.16.0
+SQLAlchemy==2.0.36
 tempora==5.7.0
 tokenize-rt==6.1.0
 tzdata==2024.2
