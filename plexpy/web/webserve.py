@@ -3870,6 +3870,72 @@ class WebInterface(object):
     @cherrypy.tools.json_out()
     @requireAuth(member_of("admin"))
     @addtoapi()
+    def migrate_sqlite(self, sqlite_file=None, sqlite_path=None, confirm_overwrite=False, **kwargs):
+        if sqlite_path:
+            sqlite_file_name = os.path.basename(sqlite_path)
+            sqlite_cache_path = os.path.join(plexpy.CONFIG.CACHE_DIR, sqlite_file_name + '.migrate.db')
+            logger.info("Received SQLite file '%s' for migration. Saving to cache: %s",
+                        sqlite_file_name, sqlite_cache_path)
+            sqlite_path = shutil.copyfile(sqlite_path, sqlite_cache_path)
+        elif sqlite_file:
+            sqlite_path = os.path.join(plexpy.CONFIG.CACHE_DIR, sqlite_file.filename + '.migrate.db')
+            logger.info("Received SQLite file '%s' for migration. Saving to cache: %s",
+                        sqlite_file.filename, sqlite_path)
+            with open(sqlite_path, 'wb') as f:
+                while True:
+                    data = sqlite_file.file.read(8192)
+                    if not data:
+                        break
+                    f.write(data)
+
+        if not sqlite_path:
+            return {'result': 'error', 'message': 'No SQLite database specified for migration.'}
+
+        try:
+            from plexpy.db.migrations import manager as migration_manager
+            from plexpy.db.migrations import settings as migration_settings
+
+            url = migration_settings.resolve_database_url(config=plexpy.CONFIG)
+            if not migration_manager.is_database_empty(url) and not helpers.bool_true(confirm_overwrite):
+                return {
+                    'result': 'confirm',
+                    'message': 'Existing Postgres data detected. This migration will overwrite it. Continue?'
+                }
+        except Exception as e:
+            logger.exception("Migration preflight failed: %s", e)
+            helpers.delete_file(sqlite_path)
+            return {'result': 'error', 'message': 'Failed to verify Postgres database state.'}
+
+        try:
+            from plexpy.db import migrate_sqlite
+        except Exception as e:
+            logger.error("Migration runner unavailable: %s", e)
+            helpers.delete_file(sqlite_path)
+            return {'result': 'error', 'message': 'Migration tool is not available yet.'}
+
+        try:
+            threading.Thread(
+                target=migrate_sqlite.run_migration,
+                kwargs={
+                    'sqlite_path': sqlite_path,
+                    'confirm_overwrite': helpers.bool_true(confirm_overwrite)
+                }
+            ).start()
+        except Exception as e:
+            logger.exception("Failed to start migration: %s", e)
+            helpers.delete_file(sqlite_path)
+            return {'result': 'error', 'message': 'Failed to start migration.'}
+
+        return {
+            'result': 'success',
+            'message': 'Database migration has started. Check the logs for progress.'
+        }
+
+    @cherrypy.config(**{'response.timeout': 3600})
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @requireAuth(member_of("admin"))
+    @addtoapi()
     def import_database(self, app=None, database_file=None, database_path=None, method=None, backup=False, **kwargs):
         """ Import a Tautulli database into Tautulli.
 

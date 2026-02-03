@@ -208,15 +208,36 @@
                 </div>
 
                 <div class="wizard-card" data-cardname="card7">
-                    <h3>Database Import</h3>
+                    <h3>Database Migration</h3>
                     <div class="wizard-input-section">
                         <p class="help-block">
-                            If you have an existing Tautulli database, you can import the data into Tautulli.
+                            If you are migrating from an existing SQLite database, you can upload it now.
                         </p>
                         <p class="help-block">
-                            To import a database, navigate to the <strong>Settings</strong> page
-                            and to the <strong>Import & Backups</strong> tab after you have completed this setup wizard.
+                            This will overwrite data in the configured Postgres database. Ensure you have backups.
                         </p>
+                    </div>
+                    <div class="wizard-input-section">
+                        <label for="migration_sqlite_file">SQLite Database File</label>
+                        <div class="row">
+                            <div class="col-xs-12">
+                                <div class="input-group">
+                                    <label for="migration_sqlite_file" class="input-group-btn">
+                                        <span class="btn btn-form">Upload</span>
+                                        <input type="file" style="display: none;" id="migration_sqlite_file" name="migration_sqlite_file" accept=".db">
+                                    </label>
+                                    <input id="migration_sqlite_file_name" type="text" class="form-control" placeholder="tautulli.db" disabled>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="help-block">Upload your existing SQLite database file (max file size is 1GB).</p>
+                    </div>
+                    <div class="wizard-input-section">
+                        <span id="migration-status-message" style="padding-right: 25px;"></span>
+                        <input type="button" id="migrate_sqlite" class="btn btn-bright" value="Start Migration">
+                    </div>
+                    <div class="wizard-input-section">
+                        <p class="help-block">You can skip this step and migrate later from Settings.</p>
                     </div>
 
                     <!-- Required fields but hidden -->
@@ -542,6 +563,84 @@ $(document).ready(function() {
 
     $('#sign-in-plex').click(function() {
         PlexOAuth(OAuthSuccessCallback, OAuthErrorCallback, OAuthMaxRetryCallback, OAuthPollCallback, OAuthPreFunction, $('#pms_client_id').val(uuidv4()).val());
+    });
+
+    $("#migration_sqlite_file").change(function() {
+        if ($(this)[0].files[0]) {
+            $("#migration_sqlite_file_name").val($(this)[0].files[0].name);
+        }
+    });
+
+    function submitSqliteMigration(confirmOverwrite) {
+        var sqlite_file = $("#migration_sqlite_file")[0].files[0];
+        if (!sqlite_file) {
+            $("#migration-status-message").html('<i class="fa fa-exclamation-triangle"></i>&nbsp; Please choose a SQLite database file.');
+            return;
+        }
+
+        $("#migrate_sqlite").prop('disabled', true);
+
+        var data = new FormData();
+        data.append('sqlite_file', sqlite_file);
+        data.append('confirm_overwrite', confirmOverwrite ? 1 : 0);
+
+        $("#migration-status-message").html('<i class="fa fa-fw fa-spin fa-refresh"></i>&nbsp; Uploading database file...');
+
+        $.ajax({
+            url: 'migrate_sqlite',
+            type: 'POST',
+            data: data,
+            cache: false,
+            async: true,
+            contentType: false,
+            processData: false,
+            success: function(data) {
+                if (data.result === 'confirm') {
+                    if (confirm(data.message)) {
+                        $("#migrate_sqlite").prop('disabled', false);
+                        submitSqliteMigration(true);
+                    } else {
+                        $("#migration-status-message").html('');
+                        $("#migrate_sqlite").prop('disabled', false);
+                    }
+                    return;
+                }
+
+                var msg;
+                if (data.result === 'success') {
+                    msg = "<i class='fa fa-check'></i>&nbsp; " + data.message;
+                    $("#migrate_sqlite").prop('disabled', true);
+                } else {
+                    msg = "<i class='fa fa-exclamation-triangle'></i>&nbsp; " + data.message;
+                    $("#migrate_sqlite").prop('disabled', false);
+                }
+                $("#migration-status-message").html(msg);
+            },
+            error: function (xhr) {
+                var msg = "<i class='fa fa-exclamation-triangle'></i>&nbsp; Error (" + xhr.status + "): ";
+                if (xhr.status === 413) {
+                    msg += "file is too large to upload";
+                } else {
+                    msg += 'try again';
+                }
+                $("#migration-status-message").html(msg);
+                $("#migrate_sqlite").prop('disabled', false);
+            }
+        });
+    }
+
+    $("#migrate_sqlite").click(function() {
+        var sqlite_file = $("#migration_sqlite_file")[0].files[0];
+        if (!sqlite_file) {
+            $("#migration-status-message").html('<i class="fa fa-exclamation-triangle"></i>&nbsp; Please choose a SQLite database file.');
+            return;
+        }
+
+        var confirmMessage = "This will overwrite data in the configured Postgres database. Continue?";
+        if (!confirm(confirmMessage)) {
+            return;
+        }
+        submitSqliteMigration(true);
     });
 });
 </script>
