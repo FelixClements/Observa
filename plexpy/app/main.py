@@ -155,6 +155,8 @@ def main():
     parser.add_argument(
         '--config', help='Specify a config file to use')
     parser.add_argument(
+        '--migrate-db', action='store_true', help='Run database migrations and exit')
+    parser.add_argument(
         '--nolaunch', action='store_true', help='Prevent browser from launching on startup')
     parser.add_argument(
         '--pidfile', help='Create a pid file (only relevant when running as a daemon)')
@@ -293,6 +295,18 @@ def main():
             os.rename(os.path.join(plexpy.DATA_DIR, 'plexpy.db'), plexpy.DB_FILE)
         except OSError as e:
             raise SystemExit("Unable to rename plexpy.db to tautulli.db: %s", e)
+
+    if args.migrate_db:
+        from plexpy.db.migrations import manager as migration_manager
+
+        try:
+            migration_manager.migrate_database(config_path=config_file)
+        except Exception as e:
+            logger.error("Database migration failed: %s" % e)
+            raise SystemExit(1)
+
+        logger.info("Database migrations applied successfully.")
+        return
 
     _sync_bootstrap_globals()
 

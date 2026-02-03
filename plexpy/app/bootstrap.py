@@ -37,6 +37,7 @@ import pytz
 
 from plexpy.app import common
 from plexpy.db import datafactory
+from plexpy.db.migrations import manager as migration_manager
 from plexpy.services import exporter
 from plexpy.services import libraries
 from plexpy.services import mobile_app
@@ -252,12 +253,14 @@ def initialize(config_file):
         CONFIG.NEWSLETTER_DIR, _ = check_folder_writable(
             CONFIG.NEWSLETTER_DIR, os.path.join(DATA_DIR, 'newsletters'), 'newsletters')
 
-        # Initialize the database
-        logger.info("Checking if the database upgrades are required...")
+        logger.info("Checking database migrations...")
         try:
-            dbcheck()
+            migration_manager.check_or_initialize(config=CONFIG)
         except Exception as e:
-            logger.error("Can't connect to the database: %s" % e)
+            logger.error("Database migration check failed: %s" % e)
+            raise SystemExit(
+                "Database migrations are required. Run Tautulli with --migrate-db to apply them."
+            )
 
         # Perform upgrades
         logger.info("Checking if configuration upgrades are required...")

@@ -114,17 +114,17 @@ Phase 3: ORM 2.0 foundation
 - Tests: engine/session creation works; model metadata loads
 
 Phase 4: Alembic migrations
-- Add Alembic config:
+- [x] Add Alembic config:
   - `alembic.ini`
   - `plexpy/db/migrations/` (env + versions)
-- Generate initial migration from ORM models with schema diff review
-- Remove schema creation from app startup:
+- [x] Generate initial migration from ORM models with schema diff review
+- [x] Remove schema creation from app startup:
   - `plexpy/app/bootstrap.py` (remove `dbcheck()` schema creation)
-- Add migration version check at startup
-- Add migration entrypoint for fresh installs (auto-init empty DB)
-- Add explicit migrate command for existing installs (no auto-destructive changes)
-- Success criteria: fresh container initializes DB; existing DB requires explicit migrate
-- Tests: `alembic upgrade head` works on empty DB; version check blocks mismatches
+- [x] Add migration version check at startup
+- [x] Add migration entrypoint for fresh installs (auto-init empty DB)
+- [x] Add explicit migrate command for existing installs (no auto-destructive changes)
+- [x] Success criteria: fresh container initializes DB; existing DB requires explicit migrate
+- [x] Tests: `alembic upgrade head` works on empty DB; version check blocks mismatches
 
 Phase 5: Setup wizard migration flow (manual trigger)
 - Add wizard UI step for migration:
