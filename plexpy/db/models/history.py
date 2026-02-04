@@ -1,9 +1,9 @@
 from typing import Optional
 
-from sqlalchemy import Index, Integer, Text, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from plexpy.db.models import Base, auto_pk, explicit_pk
+from plexpy.db.models import Base, auto_pk
 
 
 class SessionHistory(Base):
@@ -27,7 +27,7 @@ class SessionHistory(Base):
     started: Mapped[Optional[int]] = mapped_column(Integer)
     stopped: Mapped[Optional[int]] = mapped_column(Integer)
     rating_key: Mapped[Optional[int]] = mapped_column(Integer)
-    user_id: Mapped[Optional[int]] = mapped_column(Integer)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey('users.user_id'))
     user: Mapped[Optional[str]] = mapped_column(Text)
     ip_address: Mapped[Optional[str]] = mapped_column(Text)
     paused_counter: Mapped[Optional[int]] = mapped_column(Integer, server_default=text('0'))
@@ -56,7 +56,12 @@ class SessionHistoryMediaInfo(Base):
         Index('idx_session_history_media_info_transcode_decision', 'transcode_decision'),
     )
 
-    id: Mapped[int] = explicit_pk()
+    id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey('session_history.id', ondelete='CASCADE'),
+        primary_key=True,
+        autoincrement=False,
+    )
     rating_key: Mapped[Optional[int]] = mapped_column(Integer)
     video_decision: Mapped[Optional[str]] = mapped_column(Text)
     audio_decision: Mapped[Optional[str]] = mapped_column(Text)
@@ -143,7 +148,12 @@ class SessionHistoryMetadata(Base):
         Index('idx_session_history_metadata_live', 'live'),
     )
 
-    id: Mapped[int] = explicit_pk()
+    id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey('session_history.id', ondelete='CASCADE'),
+        primary_key=True,
+        autoincrement=False,
+    )
     rating_key: Mapped[Optional[int]] = mapped_column(Integer)
     parent_rating_key: Mapped[Optional[int]] = mapped_column(Integer)
     grandparent_rating_key: Mapped[Optional[int]] = mapped_column(Integer)

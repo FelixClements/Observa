@@ -4,6 +4,8 @@
 Tautulli is organized as a single `plexpy` package with focused subpackages.
 The module layout is intended to be stable for future ORM and container work
 without changing runtime behavior.
+The runtime database is PostgreSQL; SQLite is supported only as a one-time
+migration source.
 
 ## Package layout
 - `plexpy/app/`

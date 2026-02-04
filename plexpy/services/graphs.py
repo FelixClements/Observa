@@ -18,12 +18,16 @@
 import datetime
 
 import arrow
+from sqlalchemy import Integer, and_, case, cast, distinct, func, or_, select
 
 import plexpy
 from plexpy.app import common
 from plexpy.services import libraries
 from plexpy.web import session
-from plexpy.db import database
+from plexpy.db import queries
+from plexpy.db.models import SessionHistory, SessionHistoryMediaInfo, SessionHistoryMetadata, User
+from plexpy.db.session import session_scope
+from plexpy.db.queries import time as time_queries
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -38,84 +42,102 @@ class Graphs(object):
         tz_name = getattr(timezone, 'zone', None) or str(timezone)
         return tz_name.replace("'", "''")
 
-    def _localtime_expr(self, column_name='started'):
+    def _localtime_expr(self, column=SessionHistory.started):
         tz_name = self._timezone_name()
-        return "timezone('%s', to_timestamp(%s))" % (tz_name, column_name)
+        return time_queries.timezone(tz_name, time_queries.to_timestamp(column))
 
-    def _local_date_expr(self, column_name='started'):
-        return "to_char(%s, 'YYYY-MM-DD')" % self._localtime_expr(column_name)
+    def _local_date_expr(self, column=SessionHistory.started):
+        return time_queries.to_char(self._localtime_expr(column), 'YYYY-MM-DD')
 
-    def _local_month_expr(self, column_name='started'):
-        return "to_char(%s, 'YYYY-MM')" % self._localtime_expr(column_name)
+    def _local_month_expr(self, column=SessionHistory.started):
+        return time_queries.to_char(self._localtime_expr(column), 'YYYY-MM')
 
-    def _local_hour_expr(self, column_name='started'):
-        return "to_char(%s, 'HH24')" % self._localtime_expr(column_name)
+    def _local_hour_expr(self, column=SessionHistory.started):
+        return time_queries.to_char(self._localtime_expr(column), 'HH24')
 
-    def _local_dow_expr(self, column_name='started'):
-        return "EXTRACT(DOW FROM %s)::int" % self._localtime_expr(column_name)
+    def _local_dow_expr(self, column=SessionHistory.started):
+        return cast(time_queries.extract('dow', self._localtime_expr(column)), Integer)
+
+    def _group_key_expr(self, grouping):
+        return func.coalesce(SessionHistory.reference_id, SessionHistory.id) if grouping else SessionHistory.id
+
+    def _duration_expr(self):
+        return case(
+            (
+                SessionHistory.stopped > 0,
+                (SessionHistory.stopped - SessionHistory.started)
+                - func.coalesce(SessionHistory.paused_counter, 0),
+            ),
+            else_=0,
+        )
 
     def get_total_plays_per_day(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
-        date_played_expr = self._local_date_expr()
-        datestring_expr = self._local_month_expr()
-        daynumber_expr = self._local_dow_expr()
-        hourofday_expr = self._local_hour_expr()
-        daynumber_expr = self._local_dow_expr()
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
         date_played_expr = self._local_date_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT %s AS date_played, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s END) AS tv_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s END) AS movie_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s END) AS music_count, " \
-                        "COUNT(DISTINCT CASE WHEN shm.live = 1 THEN %s END) AS live_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY date_played " \
-                        "ORDER BY date_played" % (date_played_expr, group_key, group_key, group_key, group_key,
-                                                  timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                tv_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                movie_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                music_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                live_count = func.count(distinct(case(
+                    (SessionHistoryMetadata.live == 1, group_key),
+                    else_=None,
+                )))
             else:
-                query = "SELECT %s AS date_played, " \
-                        "SUM(CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN shm.live = 1 " \
-                        "  THEN %s ELSE 0 END) AS live_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s" \
-                        "GROUP BY date_played " \
-                        "ORDER BY date_played" % (date_played_expr, duration_expr, duration_expr, duration_expr,
-                                                  duration_expr, timestamp, user_cond)
+                tv_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                movie_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                music_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                live_count = func.sum(case(
+                    (SessionHistoryMetadata.live == 1, duration_expr),
+                    else_=0,
+                ))
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    date_played_expr.label('date_played'),
+                    tv_count.label('tv_count'),
+                    movie_count.label('movie_count'),
+                    music_count.label('music_count'),
+                    live_count.label('live_count'),
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(date_played_expr)
+                .order_by(date_played_expr)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_per_day: %s." % e)
             return None
@@ -179,78 +201,82 @@ class Graphs(object):
         return output
 
     def get_total_plays_per_dayofweek(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
         daynumber_expr = self._local_dow_expr()
+        dayofweek_expr = case(
+            (daynumber_expr == 0, 'Sunday'),
+            (daynumber_expr == 1, 'Monday'),
+            (daynumber_expr == 2, 'Tuesday'),
+            (daynumber_expr == 3, 'Wednesday'),
+            (daynumber_expr == 4, 'Thursday'),
+            (daynumber_expr == 5, 'Friday'),
+            else_='Saturday',
+        )
 
         try:
             if y_axis == 'plays':
-                query = "SELECT %s AS daynumber, " \
-                        "(CASE %s " \
-                        "  WHEN 0 THEN 'Sunday' " \
-                        "  WHEN 1 THEN 'Monday' " \
-                        "  WHEN 2 THEN 'Tuesday' " \
-                        "  WHEN 3 THEN 'Wednesday' " \
-                        "  WHEN 4 THEN 'Thursday' " \
-                        "  WHEN 5 THEN 'Friday' " \
-                        "  ELSE 'Saturday' END) AS dayofweek, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s END) AS tv_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s END) AS movie_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s END) AS music_count, " \
-                        "COUNT(DISTINCT CASE WHEN shm.live = 1 THEN %s END) AS live_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY %s " \
-                        "ORDER BY %s" % (daynumber_expr, daynumber_expr, group_key, group_key, group_key, group_key,
-                                         timestamp, user_cond, daynumber_expr, daynumber_expr)
-
-                result = monitor_db.select(query)
+                tv_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                movie_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                music_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                live_count = func.count(distinct(case(
+                    (SessionHistoryMetadata.live == 1, group_key),
+                    else_=None,
+                )))
             else:
-                query = "SELECT %s AS daynumber, " \
-                        "(CASE %s " \
-                        "  WHEN 0 THEN 'Sunday' " \
-                        "  WHEN 1 THEN 'Monday' " \
-                        "  WHEN 2 THEN 'Tuesday' " \
-                        "  WHEN 3 THEN 'Wednesday' " \
-                        "  WHEN 4 THEN 'Thursday' " \
-                        "  WHEN 5 THEN 'Friday' " \
-                        "  ELSE 'Saturday' END) AS dayofweek, " \
-                        "SUM(CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN shm.live = 1 " \
-                        "  THEN %s ELSE 0 END) AS live_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s" \
-                        "GROUP BY %s " \
-                        "ORDER BY %s" % (daynumber_expr, daynumber_expr, duration_expr, duration_expr, duration_expr,
-                                         duration_expr, timestamp, user_cond, daynumber_expr, daynumber_expr)
+                tv_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                movie_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                music_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                live_count = func.sum(case(
+                    (SessionHistoryMetadata.live == 1, duration_expr),
+                    else_=0,
+                ))
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    daynumber_expr.label('daynumber'),
+                    dayofweek_expr.label('dayofweek'),
+                    tv_count.label('tv_count'),
+                    movie_count.label('movie_count'),
+                    music_count.label('music_count'),
+                    live_count.label('live_count'),
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(daynumber_expr, dayofweek_expr)
+                .order_by(daynumber_expr)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_per_dayofweek: %s." % e)
             return None
@@ -309,62 +335,72 @@ class Graphs(object):
         return output
 
     def get_total_plays_per_hourofday(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
         hourofday_expr = self._local_hour_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT %s AS hourofday, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s END) AS tv_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s END) AS movie_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s END) AS music_count, " \
-                        "COUNT(DISTINCT CASE WHEN shm.live = 1 THEN %s END) AS live_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY hourofday " \
-                        "ORDER BY hourofday" % (hourofday_expr, group_key, group_key, group_key, group_key,
-                                                timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                tv_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                movie_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                music_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                live_count = func.count(distinct(case(
+                    (SessionHistoryMetadata.live == 1, group_key),
+                    else_=None,
+                )))
             else:
-                query = "SELECT %s AS hourofday, " \
-                        "SUM(CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN shm.live = 1 " \
-                        "  THEN %s ELSE 0 END) AS live_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s" \
-                        "GROUP BY hourofday " \
-                        "ORDER BY hourofday" % (hourofday_expr, duration_expr, duration_expr, duration_expr,
-                                                duration_expr, timestamp, user_cond)
+                tv_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                movie_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                music_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                live_count = func.sum(case(
+                    (SessionHistoryMetadata.live == 1, duration_expr),
+                    else_=0,
+                ))
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    hourofday_expr.label('hourofday'),
+                    tv_count.label('tv_count'),
+                    movie_count.label('movie_count'),
+                    music_count.label('music_count'),
+                    live_count.label('live_count'),
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(hourofday_expr)
+                .order_by(hourofday_expr)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_per_hourofday: %s." % e)
             return None
@@ -421,67 +457,72 @@ class Graphs(object):
         return output
 
     def get_total_plays_per_month(self, time_range='12', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 12
         timestamp = arrow.get(helpers.timestamp()).shift(months=-time_range).floor('month').timestamp()
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
+        group_key = self._group_key_expr(grouping)
         datestring_expr = self._local_month_expr()
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        duration_expr = self._duration_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT sh.datestring, " \
-                        "SUM(CASE WHEN sh.media_type = 'episode' AND sh.live = 0 THEN sh.plays ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN sh.media_type = 'movie' AND sh.live = 0 THEN sh.plays ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN sh.media_type = 'track' AND sh.live = 0 THEN sh.plays ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN sh.live = 1 THEN sh.plays ELSE 0 END) AS live_count " \
-                        "FROM (SELECT %s AS datestring, " \
-                        "      session_history.media_type AS media_type, " \
-                        "      session_history_metadata.live AS live, " \
-                        "      COUNT(DISTINCT %s) AS plays " \
-                        "    FROM session_history " \
-                        "    JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                        "    WHERE session_history.stopped >= %s %s " \
-                        "    GROUP BY datestring, session_history.media_type, session_history_metadata.live) AS sh " \
-                        "GROUP BY sh.datestring " \
-                        "ORDER BY sh.datestring" % (datestring_expr, group_key, timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                metric_label = 'plays'
+                metric_expr = func.count(distinct(group_key))
             else:
-                query = "SELECT sh.datestring, " \
-                        "SUM(CASE WHEN sh.media_type = 'episode' AND sh.live = 0 " \
-                        "  THEN sh.duration ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN sh.media_type = 'movie' AND sh.live = 0 " \
-                        "  THEN sh.duration ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN sh.media_type = 'track' AND sh.live = 0 " \
-                        "  THEN sh.duration ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN sh.live = 1 " \
-                        "  THEN sh.duration ELSE 0 END) AS live_count " \
-                        "FROM (SELECT %s AS datestring, " \
-                        "      session_history.media_type AS media_type, " \
-                        "      session_history_metadata.live AS live, " \
-                        "      SUM(%s) AS duration " \
-                        "    FROM session_history " \
-                        "    JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                        "    WHERE session_history.stopped >= %s %s" \
-                        "    GROUP BY datestring, session_history.media_type, session_history_metadata.live) AS sh " \
-                        "GROUP BY sh.datestring " \
-                        "ORDER BY sh.datestring" % (datestring_expr, duration_expr, timestamp, user_cond)
+                metric_label = 'duration'
+                metric_expr = func.sum(duration_expr)
 
-                result = monitor_db.select(query)
+            inner_stmt = (
+                select(
+                    datestring_expr.label('datestring'),
+                    SessionHistory.media_type.label('media_type'),
+                    SessionHistoryMetadata.live.label('live'),
+                    metric_expr.label(metric_label),
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(datestring_expr, SessionHistory.media_type, SessionHistoryMetadata.live)
+            )
+            for cond in user_filters:
+                inner_stmt = inner_stmt.where(cond)
+            inner = inner_stmt.subquery()
+            metric_col = getattr(inner.c, metric_label)
+
+            tv_count = func.sum(case(
+                (and_(inner.c.media_type == 'episode', inner.c.live == 0), metric_col),
+                else_=0,
+            ))
+            movie_count = func.sum(case(
+                (and_(inner.c.media_type == 'movie', inner.c.live == 0), metric_col),
+                else_=0,
+            ))
+            music_count = func.sum(case(
+                (and_(inner.c.media_type == 'track', inner.c.live == 0), metric_col),
+                else_=0,
+            ))
+            live_count = func.sum(case(
+                (inner.c.live == 1, metric_col),
+                else_=0,
+            ))
+
+            stmt = (
+                select(
+                    inner.c.datestring,
+                    tv_count.label('tv_count'),
+                    movie_count.label('movie_count'),
+                    music_count.label('music_count'),
+                    live_count.label('live_count'),
+                )
+                .group_by(inner.c.datestring)
+                .order_by(inner.c.datestring)
+            )
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_per_month: %s." % e)
             return None
@@ -546,64 +587,78 @@ class Graphs(object):
         return output
 
     def get_total_plays_by_top_10_platforms(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT session_history.platform, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s END) AS tv_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s END) AS movie_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s END) AS music_count, " \
-                        "COUNT(DISTINCT CASE WHEN shm.live = 1 THEN %s END) AS live_count, " \
-                        "COUNT(DISTINCT %s) AS total_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY session_history.platform " \
-                        "ORDER BY total_count DESC, session_history.platform ASC " \
-                        "LIMIT 10" % (group_key, group_key, group_key, group_key, group_key, timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                tv_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                movie_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                music_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                live_count = func.count(distinct(case(
+                    (SessionHistoryMetadata.live == 1, group_key),
+                    else_=None,
+                )))
+                total_count = func.count(distinct(group_key))
+                order_by = (total_count.desc(), SessionHistory.platform.asc())
+                total_metric = total_count.label('total_count')
             else:
-                query = "SELECT session_history.platform, " \
-                        "SUM(CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN shm.live = 1 " \
-                        "  THEN %s ELSE 0 END) AS live_count, " \
-                        "SUM(%s) AS total_duration " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s" \
-                        "GROUP BY session_history.platform " \
-                        "ORDER BY total_duration DESC " \
-                        "LIMIT 10" % (duration_expr, duration_expr, duration_expr, duration_expr, duration_expr,
-                                     timestamp, user_cond)
+                tv_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                movie_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                music_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                live_count = func.sum(case(
+                    (SessionHistoryMetadata.live == 1, duration_expr),
+                    else_=0,
+                ))
+                total_metric = func.sum(duration_expr).label('total_duration')
+                order_by = (total_metric.desc(),)
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    SessionHistory.platform,
+                    tv_count.label('tv_count'),
+                    movie_count.label('movie_count'),
+                    music_count.label('music_count'),
+                    live_count.label('live_count'),
+                    total_metric,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(SessionHistory.platform)
+                .order_by(*order_by)
+                .limit(10)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_by_top_10_platforms: %s." % e)
             return None
@@ -646,70 +701,84 @@ class Graphs(object):
         return output
 
     def get_total_plays_by_top_10_users(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
+        friendly_name_expr = case(
+            (or_(User.friendly_name.is_(None), func.trim(User.friendly_name) == ''), User.username),
+            else_=User.friendly_name,
         )
 
         try:
             if y_axis == 'plays':
-                query = "SELECT u.user_id, u.username, " \
-                        "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = '' " \
-                        "  THEN u.username ELSE u.friendly_name END) AS friendly_name," \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s END) AS tv_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s END) AS movie_count, " \
-                        "COUNT(DISTINCT CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s END) AS music_count, " \
-                        "COUNT(DISTINCT CASE WHEN shm.live = 1 THEN %s END) AS live_count, " \
-                        "COUNT(DISTINCT %s) AS total_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "JOIN users AS u ON u.user_id = session_history.user_id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY u.user_id, u.username, u.friendly_name " \
-                        "ORDER BY total_count DESC " \
-                        "LIMIT 10" % (group_key, group_key, group_key, group_key, group_key, timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                tv_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                movie_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                music_count = func.count(distinct(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), group_key),
+                    else_=None,
+                )))
+                live_count = func.count(distinct(case(
+                    (SessionHistoryMetadata.live == 1, group_key),
+                    else_=None,
+                )))
+                total_metric = func.count(distinct(group_key)).label('total_count')
+                order_by = (total_metric.desc(),)
             else:
-                query = "SELECT u.user_id, u.username, " \
-                        "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = '' " \
-                        " THEN u.username ELSE u.friendly_name END) AS friendly_name," \
-                        "SUM(CASE WHEN session_history.media_type = 'episode' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS tv_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'movie' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS movie_count, " \
-                        "SUM(CASE WHEN session_history.media_type = 'track' AND shm.live = 0 " \
-                        "  THEN %s ELSE 0 END) AS music_count, " \
-                        "SUM(CASE WHEN shm.live = 1 " \
-                        "  THEN %s ELSE 0 END) AS live_count, " \
-                        "SUM(%s) AS total_duration " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                        "JOIN users AS u ON u.user_id = session_history.user_id " \
-                        "WHERE session_history.stopped >= %s %s" \
-                        "GROUP BY u.user_id, u.username, u.friendly_name " \
-                        "ORDER BY total_duration DESC " \
-                        "LIMIT 10" % (duration_expr, duration_expr, duration_expr, duration_expr, duration_expr,
-                                     timestamp, user_cond)
+                tv_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'episode', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                movie_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'movie', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                music_count = func.sum(case(
+                    (and_(SessionHistory.media_type == 'track', SessionHistoryMetadata.live == 0), duration_expr),
+                    else_=0,
+                ))
+                live_count = func.sum(case(
+                    (SessionHistoryMetadata.live == 1, duration_expr),
+                    else_=0,
+                ))
+                total_metric = func.sum(duration_expr).label('total_duration')
+                order_by = (total_metric.desc(),)
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    User.user_id,
+                    User.username,
+                    friendly_name_expr.label('friendly_name'),
+                    tv_count.label('tv_count'),
+                    movie_count.label('movie_count'),
+                    music_count.label('music_count'),
+                    live_count.label('live_count'),
+                    total_metric,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .join(User, User.user_id == SessionHistory.user_id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(User.user_id, User.username, User.friendly_name)
+                .order_by(*order_by)
+                .limit(10)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_by_top_10_users: %s." % e)
             return None
@@ -757,53 +826,63 @@ class Graphs(object):
         return output
 
     def get_total_plays_per_stream_type(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
         date_played_expr = self._local_date_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT %s AS date_played, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'direct play' THEN %s END) AS dp_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'copy' THEN %s END) AS ds_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'transcode' THEN %s END) AS tc_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY date_played " \
-                        "ORDER BY date_played" % (date_played_expr, group_key, group_key, group_key,
-                                                  timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                dp_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', group_key),
+                    else_=None,
+                )))
+                ds_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', group_key),
+                    else_=None,
+                )))
+                tc_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', group_key),
+                    else_=None,
+                )))
             else:
-                query = "SELECT %s AS date_played, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'direct play' THEN %s ELSE 0 END) AS dp_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'copy' THEN %s ELSE 0 END) AS ds_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'transcode' THEN %s ELSE 0 END) AS tc_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s" \
-                        "GROUP BY date_played " \
-                        "ORDER BY date_played" % (date_played_expr, duration_expr, duration_expr, duration_expr,
-                                                  timestamp, user_cond)
+                dp_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', duration_expr),
+                    else_=0,
+                ))
+                ds_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', duration_expr),
+                    else_=0,
+                ))
+                tc_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', duration_expr),
+                    else_=0,
+                ))
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    date_played_expr.label('date_played'),
+                    dp_count.label('dp_count'),
+                    ds_count.label('ds_count'),
+                    tc_count.label('tc_count'),
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(date_played_expr)
+                .order_by(date_played_expr)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_per_stream_type: %s." % e)
             return None
@@ -846,12 +925,10 @@ class Graphs(object):
         return output
 
     def get_total_concurrent_streams_per_stream_type(self, time_range='30', user_id=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
 
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
         date_played_expr = self._local_date_expr()
         
         def calc_most_concurrent(result):
@@ -877,14 +954,23 @@ class Graphs(object):
             return final_count
 
         try:
-            query = "SELECT %s AS date_played, session_history.started, session_history.stopped, " \
-                    "shmi.transcode_decision " \
-                    "FROM session_history " \
-                    "JOIN session_history_media_info AS shmi ON session_history.id = shmi.id " \
-                    "WHERE session_history.stopped >= %s %s " \
-                    "ORDER BY session_history.started" % (date_played_expr, timestamp, user_cond)
+            stmt = (
+                select(
+                    date_played_expr.label('date_played'),
+                    SessionHistory.started,
+                    SessionHistory.stopped,
+                    SessionHistoryMediaInfo.transcode_decision,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .order_by(SessionHistory.started)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
 
-            result = monitor_db.select(query)
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_per_stream_type: %s." % e)
             return None
@@ -939,56 +1025,71 @@ class Graphs(object):
         return output
 
     def get_total_plays_by_source_resolution(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT shmi.video_full_resolution AS resolution, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'direct play' THEN %s END) AS dp_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'copy' THEN %s END) AS ds_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'transcode' THEN %s END) AS tc_count, " \
-                        "COUNT(DISTINCT %s) AS total_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s " \
-                        "AND session_history.media_type IN ('movie', 'episode') %s " \
-                        "GROUP BY shmi.video_full_resolution " \
-                        "ORDER BY total_count DESC " \
-                        "LIMIT 10" % (group_key, group_key, group_key, group_key, timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                dp_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', group_key),
+                    else_=None,
+                )))
+                ds_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', group_key),
+                    else_=None,
+                )))
+                tc_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', group_key),
+                    else_=None,
+                )))
+                total_metric = func.count(distinct(group_key)).label('total_count')
+                order_by = (total_metric.desc(),)
             else:
-                query = "SELECT shmi.video_full_resolution AS resolution," \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'direct play' THEN %s ELSE 0 END) AS dp_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'copy' THEN %s ELSE 0 END) AS ds_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'transcode' THEN %s ELSE 0 END) AS tc_count, " \
-                        "SUM(%s) AS total_duration " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s " \
-                        "AND session_history.media_type IN ('movie', 'episode') %s " \
-                        "GROUP BY shmi.video_full_resolution " \
-                        "ORDER BY total_duration DESC " \
-                        "LIMIT 10" % (duration_expr, duration_expr, duration_expr, duration_expr, timestamp, user_cond)
+                dp_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', duration_expr),
+                    else_=0,
+                ))
+                ds_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', duration_expr),
+                    else_=0,
+                ))
+                tc_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', duration_expr),
+                    else_=0,
+                ))
+                total_metric = func.sum(duration_expr).label('total_duration')
+                order_by = (total_metric.desc(),)
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    SessionHistoryMediaInfo.video_full_resolution.label('resolution'),
+                    dp_count.label('dp_count'),
+                    ds_count.label('ds_count'),
+                    tc_count.label('tc_count'),
+                    total_metric,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .where(
+                    SessionHistory.stopped >= timestamp,
+                    SessionHistory.media_type.in_(['movie', 'episode']),
+                )
+                .group_by(SessionHistoryMediaInfo.video_full_resolution)
+                .order_by(*order_by)
+                .limit(10)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_by_source_resolution: %s." % e)
             return None
@@ -1017,73 +1118,90 @@ class Graphs(object):
         return output
 
     def get_total_plays_by_stream_resolution(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
+
+        transcode_resolution = case(
+            (SessionHistoryMediaInfo.transcode_height <= 360, 'SD'),
+            (SessionHistoryMediaInfo.transcode_height <= 480, '480'),
+            (SessionHistoryMediaInfo.transcode_height <= 576, '576'),
+            (SessionHistoryMediaInfo.transcode_height <= 720, '720'),
+            (SessionHistoryMediaInfo.transcode_height <= 1080, '1080'),
+            (SessionHistoryMediaInfo.transcode_height <= 1440, 'QHD'),
+            (SessionHistoryMediaInfo.transcode_height <= 2160, '4k'),
+            else_='unknown',
         )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
+        resolved_transcode = case(
+            (SessionHistoryMediaInfo.video_decision == 'transcode', transcode_resolution),
+            else_=SessionHistoryMediaInfo.video_full_resolution,
         )
-        resolution_expr = (
-            "(CASE WHEN shmi.stream_video_full_resolution IS NULL THEN "
-            "  (CASE WHEN shmi.video_decision = 'transcode' THEN "
-            "    (CASE "
-            "      WHEN shmi.transcode_height <= 360 THEN 'SD' "
-            "      WHEN shmi.transcode_height <= 480 THEN '480' "
-            "      WHEN shmi.transcode_height <= 576 THEN '576' "
-            "      WHEN shmi.transcode_height <= 720 THEN '720' "
-            "      WHEN shmi.transcode_height <= 1080 THEN '1080' "
-            "      WHEN shmi.transcode_height <= 1440 THEN 'QHD' "
-            "      WHEN shmi.transcode_height <= 2160 THEN '4k' "
-            "      ELSE 'unknown' END)"
-            "    ELSE shmi.video_full_resolution END) "
-            "  ELSE shmi.stream_video_full_resolution END)"
+        resolution_expr = case(
+            (SessionHistoryMediaInfo.stream_video_full_resolution.is_(None), resolved_transcode),
+            else_=SessionHistoryMediaInfo.stream_video_full_resolution,
         )
 
         try:
             if y_axis == 'plays':
-                query = "SELECT %s AS resolution, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'direct play' THEN %s END) AS dp_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'copy' THEN %s END) AS ds_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'transcode' THEN %s END) AS tc_count, " \
-                        "COUNT(DISTINCT %s) AS total_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s " \
-                        "AND session_history.media_type IN ('movie', 'episode') %s " \
-                        "GROUP BY %s " \
-                        "ORDER BY total_count DESC " \
-                        "LIMIT 10" % (resolution_expr, group_key, group_key, group_key, group_key,
-                                     timestamp, user_cond, resolution_expr)
-
-                result = monitor_db.select(query)
+                dp_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', group_key),
+                    else_=None,
+                )))
+                ds_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', group_key),
+                    else_=None,
+                )))
+                tc_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', group_key),
+                    else_=None,
+                )))
+                total_metric = func.count(distinct(group_key)).label('total_count')
+                order_by = (total_metric.desc(),)
             else:
-                query = "SELECT %s AS resolution, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'direct play' THEN %s ELSE 0 END) AS dp_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'copy' THEN %s ELSE 0 END) AS ds_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'transcode' THEN %s ELSE 0 END) AS tc_count, " \
-                        "SUM(%s) AS total_duration " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s " \
-                        "AND session_history.media_type IN ('movie', 'episode') %s " \
-                        "GROUP BY %s " \
-                        "ORDER BY total_duration DESC " \
-                        "LIMIT 10" % (resolution_expr, duration_expr, duration_expr, duration_expr, duration_expr,
-                                     timestamp, user_cond, resolution_expr)
+                dp_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', duration_expr),
+                    else_=0,
+                ))
+                ds_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', duration_expr),
+                    else_=0,
+                ))
+                tc_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', duration_expr),
+                    else_=0,
+                ))
+                total_metric = func.sum(duration_expr).label('total_duration')
+                order_by = (total_metric.desc(),)
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    resolution_expr.label('resolution'),
+                    dp_count.label('dp_count'),
+                    ds_count.label('ds_count'),
+                    tc_count.label('tc_count'),
+                    total_metric,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .where(
+                    SessionHistory.stopped >= timestamp,
+                    SessionHistory.media_type.in_(['movie', 'episode']),
+                )
+                .group_by(resolution_expr)
+                .order_by(*order_by)
+                .limit(10)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_total_plays_by_stream_resolution: %s." % e)
             return None
@@ -1112,54 +1230,68 @@ class Graphs(object):
         return output
 
     def get_stream_type_by_top_10_platforms(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
 
         try:
             if y_axis == 'plays':
-                query = "SELECT session_history.platform, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'direct play' THEN %s END) AS dp_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'copy' THEN %s END) AS ds_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'transcode' THEN %s END) AS tc_count, " \
-                        "COUNT(DISTINCT %s) AS total_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY session_history.platform " \
-                        "ORDER BY total_count DESC " \
-                        "LIMIT 10" % (group_key, group_key, group_key, group_key, timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                dp_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', group_key),
+                    else_=None,
+                )))
+                ds_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', group_key),
+                    else_=None,
+                )))
+                tc_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', group_key),
+                    else_=None,
+                )))
+                total_metric = func.count(distinct(group_key)).label('total_count')
+                order_by = (total_metric.desc(),)
             else:
-                query = "SELECT session_history.platform, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'direct play' THEN %s ELSE 0 END) AS dp_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'copy' THEN %s ELSE 0 END) AS ds_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'transcode' THEN %s ELSE 0 END) AS tc_count, " \
-                        "SUM(%s) AS total_duration " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY session_history.platform " \
-                        "ORDER BY total_duration DESC " \
-                        "LIMIT 10" % (duration_expr, duration_expr, duration_expr, duration_expr, timestamp, user_cond)
+                dp_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', duration_expr),
+                    else_=0,
+                ))
+                ds_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', duration_expr),
+                    else_=0,
+                ))
+                tc_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', duration_expr),
+                    else_=0,
+                ))
+                total_metric = func.sum(duration_expr).label('total_duration')
+                order_by = (total_metric.desc(),)
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    SessionHistory.platform,
+                    dp_count.label('dp_count'),
+                    ds_count.label('ds_count'),
+                    tc_count.label('tc_count'),
+                    total_metric,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(SessionHistory.platform)
+                .order_by(*order_by)
+                .limit(10)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_stream_type_by_top_10_platforms: %s." % e)
             return None
@@ -1189,61 +1321,75 @@ class Graphs(object):
         return output
 
     def get_stream_type_by_top_10_users(self, time_range='30', y_axis='plays', user_id=None, grouping=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range) or 30
         timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-
-        user_cond = self._make_user_cond(user_id)
+        user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN stopped > 0 THEN (stopped - started) - "
-            "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END)"
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
+        friendly_name_expr = case(
+            (or_(User.friendly_name.is_(None), func.trim(User.friendly_name) == ''), User.username),
+            else_=User.friendly_name,
         )
 
         try:
             if y_axis == 'plays':
-                query = "SELECT u.user_id, u.username, " \
-                        "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = '' " \
-                        "  THEN u.username ELSE u.friendly_name END) AS friendly_name," \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'direct play' THEN %s END) AS dp_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'copy' THEN %s END) AS ds_count, " \
-                        "COUNT(DISTINCT CASE WHEN shmi.transcode_decision = 'transcode' THEN %s END) AS tc_count, " \
-                        "COUNT(DISTINCT %s) AS total_count " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "JOIN users AS u ON u.user_id = session_history.user_id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY u.user_id, u.username, u.friendly_name " \
-                        "ORDER BY total_count DESC " \
-                        "LIMIT 10" % (group_key, group_key, group_key, group_key, timestamp, user_cond)
-
-                result = monitor_db.select(query)
+                dp_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', group_key),
+                    else_=None,
+                )))
+                ds_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', group_key),
+                    else_=None,
+                )))
+                tc_count = func.count(distinct(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', group_key),
+                    else_=None,
+                )))
+                total_metric = func.count(distinct(group_key)).label('total_count')
+                order_by = (total_metric.desc(),)
             else:
-                query = "SELECT u.user_id, u.username, " \
-                        "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = '' " \
-                        "  THEN u.username ELSE u.friendly_name END) AS friendly_name," \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'direct play' THEN %s ELSE 0 END) AS dp_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'copy' THEN %s ELSE 0 END) AS ds_count, " \
-                        "SUM(CASE WHEN shmi.transcode_decision = 'transcode' THEN %s ELSE 0 END) AS tc_count, " \
-                        "SUM(%s) AS total_duration " \
-                        "FROM session_history " \
-                        "JOIN session_history_media_info AS shmi ON shmi.id = session_history.id " \
-                        "JOIN users AS u ON u.user_id = session_history.user_id " \
-                        "WHERE session_history.stopped >= %s %s " \
-                        "GROUP BY u.user_id, u.username, u.friendly_name " \
-                        "ORDER BY total_duration DESC " \
-                        "LIMIT 10" % (duration_expr, duration_expr, duration_expr, duration_expr,
-                                     timestamp, user_cond)
+                dp_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'direct play', duration_expr),
+                    else_=0,
+                ))
+                ds_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'copy', duration_expr),
+                    else_=0,
+                ))
+                tc_count = func.sum(case(
+                    (SessionHistoryMediaInfo.transcode_decision == 'transcode', duration_expr),
+                    else_=0,
+                ))
+                total_metric = func.sum(duration_expr).label('total_duration')
+                order_by = (total_metric.desc(),)
 
-                result = monitor_db.select(query)
+            stmt = (
+                select(
+                    User.user_id,
+                    User.username,
+                    friendly_name_expr.label('friendly_name'),
+                    dp_count.label('dp_count'),
+                    ds_count.label('ds_count'),
+                    tc_count.label('tc_count'),
+                    total_metric,
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .join(User, User.user_id == SessionHistory.user_id)
+                .where(SessionHistory.stopped >= timestamp)
+                .group_by(User.user_id, User.username, User.friendly_name)
+                .order_by(*order_by)
+                .limit(10)
+            )
+            for cond in user_filters:
+                stmt = stmt.where(cond)
+
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Graphs :: Unable to execute database query for get_stream_type_by_top_10_users: %s." % e)
             return None
@@ -1277,16 +1423,18 @@ class Graphs(object):
 
         return output
 
-    def _make_user_cond(self, user_id, cond_prefix='AND'):
+    def _make_user_cond(self, user_id):
         """
         Expects user_id to be a comma-separated list of ints.
+        Returns a list of SQLAlchemy filter expressions.
         """
-        user_cond = ''
+        user_filters = []
 
-        if session.get_session_user_id() and user_id and user_id != str(session.get_session_user_id()):
-            user_cond = cond_prefix + ' session_history.user_id = %s ' % session.get_session_user_id()
+        session_user_id = session.get_session_user_id()
+        if session_user_id and user_id and user_id != str(session_user_id):
+            user_filters.append(SessionHistory.user_id == helpers.cast_to_int(session_user_id))
         elif user_id:
             user_ids = helpers.split_strip(user_id)
             if all(id.isdigit() for id in user_ids):
-                user_cond = cond_prefix + ' session_history.user_id IN (%s) ' % ','.join(user_ids)
-        return user_cond
+                user_filters.append(SessionHistory.user_id.in_(list(map(helpers.cast_to_int, user_ids))))
+        return user_filters

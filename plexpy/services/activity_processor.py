@@ -452,6 +452,15 @@ class ActivityProcessor(object):
                           'optimized_version_title': session['optimized_version_title']
                           }
 
+                def _optional_int(value):
+                    if value is None or value == '':
+                        return None
+                    return helpers.cast_to_int(value)
+
+                for column in SessionHistoryMediaInfo.__table__.columns:
+                    if column.name in values and isinstance(column.type, Integer):
+                        values[column.name] = _optional_int(values[column.name])
+
                 # logger.debug("Tautulli ActivityProcessor :: Writing sessionKey %s session_history_media_info transaction..."
                 #              % session['session_key'])
                 with session_scope() as db_session:
@@ -580,23 +589,38 @@ class ActivityProcessor(object):
 
         else:
             # Check if we should group the session, select the last two rows from the user
-            with session_scope() as db_session:
-                stmt = (
-                    select(
-                        SessionHistory.id,
-                        SessionHistory.rating_key,
-                        SessionHistory.view_offset,
-                        SessionHistory.reference_id,
+            user_id = session.get('user_id')
+            if str(user_id).isdigit():
+                user_id = helpers.cast_to_int(user_id)
+            else:
+                user_id = None
+
+            rating_key = session.get('rating_key')
+            if str(rating_key).isdigit():
+                rating_key = helpers.cast_to_int(rating_key)
+            else:
+                rating_key = None
+
+            if user_id is None or rating_key is None:
+                result = []
+            else:
+                with session_scope() as db_session:
+                    stmt = (
+                        select(
+                            SessionHistory.id,
+                            SessionHistory.rating_key,
+                            SessionHistory.view_offset,
+                            SessionHistory.reference_id,
+                        )
+                        .where(
+                            SessionHistory.id <= last_id,
+                            SessionHistory.user_id == user_id,
+                            SessionHistory.rating_key == rating_key,
+                        )
+                        .order_by(SessionHistory.id.desc())
+                        .limit(2)
                     )
-                    .where(
-                        SessionHistory.id <= last_id,
-                        SessionHistory.user_id == session['user_id'],
-                        SessionHistory.rating_key == session['rating_key'],
-                    )
-                    .order_by(SessionHistory.id.desc())
-                    .limit(2)
-                )
-                result = queries.fetch_mappings(db_session, stmt)
+                    result = queries.fetch_mappings(db_session, stmt)
 
             if len(result) > 1:
                 new_session = {'id': result[0]['id'],

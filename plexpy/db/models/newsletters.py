@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import Integer, Text, text
+from sqlalchemy import ForeignKey, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from plexpy.db.models import Base, auto_pk
@@ -29,7 +29,10 @@ class NewsletterLog(Base):
 
     id: Mapped[int] = auto_pk()
     timestamp: Mapped[Optional[int]] = mapped_column(Integer)
-    newsletter_id: Mapped[Optional[int]] = mapped_column(Integer)
+    newsletter_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey('newsletters.id', ondelete='SET NULL'),
+    )
     agent_id: Mapped[Optional[int]] = mapped_column(Integer)
     agent_name: Mapped[Optional[str]] = mapped_column(Text)
     notify_action: Mapped[Optional[str]] = mapped_column(Text)

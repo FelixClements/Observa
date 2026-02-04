@@ -17,13 +17,38 @@
 
 import json
 
+from sqlalchemy import Float, and_, case, cast, delete, distinct, func, insert, lateral, literal, or_, select, text, true, update
+from sqlalchemy.orm import aliased
+
 import plexpy
 from plexpy.app import common
 from plexpy.db import datatables
+from plexpy.db import queries
+from plexpy.db.engine import get_engine
+from plexpy.db.models import (
+    CloudinaryLookup,
+    ImageHashLookup,
+    ImgurLookup,
+    LibrarySection,
+    MusicbrainzLookup,
+    NewsletterLog,
+    NotifyLog,
+    RecentlyAdded,
+    Session,
+    SessionContinued,
+    SessionHistory,
+    SessionHistoryMediaInfo,
+    SessionHistoryMetadata,
+    TheMovieDbLookup,
+    TvmazeLookup,
+    User,
+)
+from plexpy.db.queries import raw_pg
+from plexpy.db.queries import time as time_queries
+from plexpy.db.session import session_scope
 from plexpy.integrations import pmsconnect
 from plexpy.services import users
 from plexpy.web import session
-from plexpy.db import database
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -42,6 +67,56 @@ class DataFactory(object):
 
     def __init__(self):
         pass
+
+    def _group_key_expr(self, grouping):
+        return func.coalesce(SessionHistory.reference_id, SessionHistory.id) if grouping else SessionHistory.id
+
+    def _duration_expr(self):
+        return case(
+            (
+                SessionHistory.stopped > 0,
+                (SessionHistory.stopped - SessionHistory.started)
+                - func.coalesce(SessionHistory.paused_counter, 0),
+            ),
+            else_=0,
+        )
+
+    def _timeframe_filters(self, time_range, before=None, after=None):
+        filters = []
+        started_date = time_queries.to_char(
+            time_queries.to_timestamp(SessionHistory.started),
+            'YYYY-MM-DD',
+        )
+
+        if before:
+            filters.append(started_date <= before)
+            if not after:
+                timestamp = helpers.YMD_to_timestamp(before) - time_range * 24 * 60 * 60
+                filters.append(SessionHistory.stopped >= timestamp)
+
+        if after:
+            filters.append(started_date >= after)
+            if not before:
+                timestamp = helpers.YMD_to_timestamp(after) + time_range * 24 * 60 * 60
+                filters.append(SessionHistory.stopped <= timestamp)
+
+        if not (before or after):
+            timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
+            filters.append(SessionHistory.stopped >= timestamp)
+
+        return filters
+
+    def _bind_params(self, query, args):
+        if not args:
+            return query, {}
+
+        params = {}
+        for idx, value in enumerate(args, start=1):
+            param_name = f"param_{idx}"
+            query = query.replace('?', f":{param_name}", 1)
+            params[param_name] = value
+
+        return query, params
 
     def get_datatables_history(self, kwargs=None, custom_where=None, grouping=None, include_activity=None):
         data_tables = datatables.DataTables()
@@ -369,8 +444,6 @@ class DataFactory(object):
     def get_home_stats(self, grouping=None, time_range=30, stats_type='plays',
                        stats_start=0, stats_count=10, stat_id='', stats_cards=None,
                        section_id=None, user_id=None, before=None, after=None):
-        monitor_db = database.MonitorDatabase()
-
         time_range = helpers.cast_to_int(time_range)
 
         stats_start = helpers.cast_to_int(stats_start)
@@ -382,811 +455,1032 @@ class DataFactory(object):
         if stats_cards is None:
             stats_cards = plexpy.CONFIG.HOME_STATS_CARDS
 
-        where_timeframe = ''
-        if before:
-            where_timeframe += (
-                "AND to_char(to_timestamp(started), 'YYYY-MM-DD') <= '%s' " % before
-            )
-            if not after:
-                timestamp = helpers.YMD_to_timestamp(before) - time_range * 24 * 60 * 60
-                where_timeframe += "AND session_history.stopped >= %s " % timestamp
-        if after:
-            where_timeframe += (
-                "AND to_char(to_timestamp(started), 'YYYY-MM-DD') >= '%s' " % after
-            )
-            if not before:
-                timestamp = helpers.YMD_to_timestamp(after) + time_range * 24 * 60 * 60
-                where_timeframe += "AND session_history.stopped <= %s " % timestamp
-        if not (before and after):
-            timestamp = helpers.timestamp() - time_range * 24 * 60 * 60
-            where_timeframe += "AND session_history.stopped >= %s" % timestamp
-
-        where_id = ''
+        filters = self._timeframe_filters(time_range=time_range, before=before, after=after)
         if section_id:
-            where_id += 'AND session_history.section_id = %s ' % section_id
+            filters.append(SessionHistory.section_id == helpers.cast_to_int(section_id))
         if user_id:
-            where_id += 'AND session_history.user_id = %s ' % user_id
+            filters.append(SessionHistory.user_id == helpers.cast_to_int(user_id))
 
-        group_key = (
-            'COALESCE(session_history.reference_id, session_history.id)'
-            if grouping else 'session_history.id'
-        )
-        duration_expr = (
-            "(CASE WHEN session_history.stopped > 0 THEN (session_history.stopped - session_history.started) - "
-            "(CASE WHEN session_history.paused_counter IS NULL THEN 0 ELSE session_history.paused_counter END) "
-            "ELSE 0 END)"
-        )
+        group_key = self._group_key_expr(grouping)
+        duration_expr = self._duration_expr()
         sort_type = 'total_duration' if stats_type == 'duration' else 'total_plays'
 
         home_stats = []
 
-        for stat in stats_cards:
-            if stat == 'top_movies':
-                top_movies = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, shm.full_title, shm.year, " \
-                            "MAX(session_history.rating_key) AS rating_key, MAX(shm.thumb) AS thumb, " \
-                            "MAX(session_history.section_id) AS section_id, MAX(shm.art) AS art, " \
-                            "MAX(session_history.media_type) AS media_type, MAX(shm.content_rating) AS content_rating, " \
-                            "MAX(shm.labels) AS labels, MAX(session_history.started) AS started, " \
-                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "WHERE session_history.media_type = 'movie' %s %s " \
-                            "GROUP BY shm.full_title, shm.year " \
-                            "ORDER BY %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_movies: %s." % e)
-                    return None
+        def apply_filters(stmt):
+            for cond in filters:
+                stmt = stmt.where(cond)
+            return stmt
 
-                for item in result:
-                    row = {'title': item['full_title'],
-                           'year': item['year'],
-                           'total_plays': item['total_plays'],
-                           'total_duration': item['total_duration'],
-                           'users_watched': '',
-                           'rating_key': item['rating_key'],
-                           'grandparent_rating_key': '',
-                           'last_play': item['last_watch'],
-                           'grandparent_thumb': '',
-                           'thumb': item['thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'user': '',
-                           'friendly_name': '',
-                           'platform': '',
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    top_movies.append(row)
+        friendly_name_expr = case(
+            (or_(User.friendly_name.is_(None), func.trim(User.friendly_name) == ''), User.username),
+            else_=User.friendly_name,
+        )
 
-                home_stats.append({'stat_id': stat,
-                                   'stat_type': sort_type,
-                                   'stat_title': 'Most Watched Movies',
-                                   'rows': session.mask_session_info(top_movies)})
+        with session_scope() as db_session:
+            for stat in stats_cards:
+                if stat == 'top_movies':
+                    top_movies = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-            elif stat == 'popular_movies':
-                popular_movies = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, shm.full_title, shm.year, " \
-                            "MAX(session_history.rating_key) AS rating_key, MAX(shm.thumb) AS thumb, " \
-                            "MAX(session_history.section_id) AS section_id, MAX(shm.art) AS art, " \
-                            "MAX(session_history.media_type) AS media_type, MAX(shm.content_rating) AS content_rating, " \
-                            "MAX(shm.labels) AS labels, MAX(session_history.started) AS started, " \
-                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "COUNT(DISTINCT session_history.user_id) AS users_watched, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "WHERE session_history.media_type = 'movie' %s %s " \
-                            "GROUP BY shm.full_title, shm.year " \
-                            "ORDER BY users_watched DESC, %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_movies: %s." % e)
-                    return None
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                SessionHistoryMetadata.full_title,
+                                SessionHistoryMetadata.year,
+                                func.max(SessionHistory.rating_key).label('rating_key'),
+                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistory.started).label('started'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.media_type == 'movie')
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistoryMetadata.full_title, SessionHistoryMetadata.year)
+                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_movies: %s." % e)
+                        return None
 
-                for item in result:
-                    row = {'title': item['full_title'],
-                           'year': item['year'],
-                           'users_watched': item['users_watched'],
-                           'rating_key': item['rating_key'],
-                           'grandparent_rating_key': '',
-                           'last_play': item['last_watch'],
-                           'total_plays': item['total_plays'],
-                           'grandparent_thumb': '',
-                           'thumb': item['thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'user': '',
-                           'friendly_name': '',
-                           'platform': '',
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    popular_movies.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_title': 'Most Popular Movies',
-                                   'rows': session.mask_session_info(popular_movies)})
-
-            elif stat == 'top_tv':
-                top_tv = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, shm.grandparent_title, " \
-                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
-                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
-                            "MAX(session_history.section_id) AS section_id, " \
-                            "MAX(shm.year) AS year, MAX(session_history.rating_key) AS rating_key, " \
-                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
-                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
-                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "WHERE session_history.media_type = 'episode' %s %s " \
-                            "GROUP BY shm.grandparent_title " \
-                            "ORDER BY %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_tv: %s." % e)
-                    return None
-
-                for item in result:
-                    row = {'title': item['grandparent_title'],
-                           'year': item['year'],
-                           'total_plays': item['total_plays'],
-                           'total_duration': item['total_duration'],
-                           'users_watched': '',
-                           'rating_key': item['rating_key'] if item['live'] else item['grandparent_rating_key'],
-                           'grandparent_rating_key': item['grandparent_rating_key'],
-                           'last_play': item['last_watch'],
-                           'grandparent_thumb': item['grandparent_thumb'],
-                           'thumb': item['grandparent_thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'user': '',
-                           'friendly_name': '',
-                           'platform': '',
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    top_tv.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_type': sort_type,
-                                   'stat_title': 'Most Watched TV Shows',
-                                   'rows': session.mask_session_info(top_tv)})
-
-            elif stat == 'popular_tv':
-                popular_tv = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, shm.grandparent_title, " \
-                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
-                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
-                            "MAX(session_history.section_id) AS section_id, " \
-                            "MAX(shm.year) AS year, MAX(session_history.rating_key) AS rating_key, " \
-                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
-                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
-                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "COUNT(DISTINCT session_history.user_id) AS users_watched, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "WHERE session_history.media_type = 'episode' %s %s " \
-                            "GROUP BY shm.grandparent_title " \
-                            "ORDER BY users_watched DESC, %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_tv: %s." % e)
-                    return None
-
-                for item in result:
-                    row = {'title': item['grandparent_title'],
-                           'year': item['year'],
-                           'users_watched': item['users_watched'],
-                           'rating_key': item['rating_key'] if item['live'] else item['grandparent_rating_key'],
-                           'grandparent_rating_key': item['grandparent_rating_key'],
-                           'last_play': item['last_watch'],
-                           'total_plays': item['total_plays'],
-                           'grandparent_thumb': item['grandparent_thumb'],
-                           'thumb': item['grandparent_thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'user': '',
-                           'friendly_name': '',
-                           'platform': '',
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    popular_tv.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_title': 'Most Popular TV Shows',
-                                   'rows': session.mask_session_info(popular_tv)})
-
-            elif stat == 'top_music':
-                top_music = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, " \
-                            "shm.grandparent_title, shm.original_title, " \
-                            "MAX(shm.year) AS year, " \
-                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
-                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
-                            "MAX(session_history.section_id) AS section_id, " \
-                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
-                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
-                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "WHERE session_history.media_type = 'track' %s %s " \
-                            "GROUP BY shm.original_title, shm.grandparent_title " \
-                            "ORDER BY %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_music: %s." % e)
-                    return None
-
-                for item in result:
-                    row = {'title': item['original_title'] or item['grandparent_title'],
-                           'year': item['year'],
-                           'total_plays': item['total_plays'],
-                           'total_duration': item['total_duration'],
-                           'users_watched': '',
-                           'rating_key': item['grandparent_rating_key'],
-                           'grandparent_rating_key': item['grandparent_rating_key'],
-                           'last_play': item['last_watch'],
-                           'grandparent_thumb': item['grandparent_thumb'],
-                           'thumb': item['grandparent_thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'user': '',
-                           'friendly_name': '',
-                           'platform': '',
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    top_music.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_type': sort_type,
-                                   'stat_title': 'Most Played Artists',
-                                   'rows': session.mask_session_info(top_music)})
-
-            elif stat == 'popular_music':
-                popular_music = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, " \
-                            "shm.grandparent_title, shm.original_title, " \
-                            "MAX(shm.year) AS year, " \
-                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
-                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
-                            "MAX(session_history.section_id) AS section_id, " \
-                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
-                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
-                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "COUNT(DISTINCT session_history.user_id) AS users_watched, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "WHERE session_history.media_type = 'track' %s %s " \
-                            "GROUP BY shm.original_title, shm.grandparent_title " \
-                            "ORDER BY users_watched DESC, %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_music: %s." % e)
-                    return None
-
-                for item in result:
-                    row = {'title': item['original_title'] or item['grandparent_title'],
-                           'year': item['year'],
-                           'users_watched': item['users_watched'],
-                           'rating_key': item['grandparent_rating_key'],
-                           'grandparent_rating_key': item['grandparent_rating_key'],
-                           'last_play': item['last_watch'],
-                           'total_plays': item['total_plays'],
-                           'grandparent_thumb': item['grandparent_thumb'],
-                           'thumb': item['grandparent_thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'user': '',
-                           'friendly_name': '',
-                           'platform': '',
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    popular_music.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_title': 'Most Popular Artists',
-                                   'rows': session.mask_session_info(popular_music)})
-
-            elif stat == 'top_libraries':
-                top_libraries = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, MAX(shm.title) AS title, " \
-                            "MAX(shm.grandparent_title) AS grandparent_title, MAX(shm.full_title) AS full_title, " \
-                            "MAX(shm.year) AS year, MAX(shm.media_index) AS media_index, " \
-                            "MAX(shm.parent_media_index) AS parent_media_index, " \
-                            "MAX(session_history.rating_key) AS rating_key, " \
-                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
-                            "MAX(shm.thumb) AS thumb, MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
-                            "MAX(session_history.user) AS user, MAX(session_history.user_id) AS user_id, " \
-                            "MAX(session_history.player) AS player, session_history.section_id AS section_id, " \
-                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
-                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
-                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "MAX(ls.section_name) AS section_name, MAX(ls.section_type) AS section_type, " \
-                            "MAX(ls.thumb) AS library_thumb, MAX(ls.custom_thumb_url) AS custom_thumb, " \
-                            "MAX(ls.art) AS library_art, MAX(ls.custom_art_url) AS custom_art, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "LEFT OUTER JOIN library_sections AS ls " \
-                            "   ON session_history.section_id = ls.section_id AND ls.deleted_section = 0 " \
-                            "WHERE %s %s " \
-                            "GROUP BY session_history.section_id " \
-                            "ORDER BY %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe[4:], where_id,
-                                                     sort_type, stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_libraries: %s." % e)
-                    return None
-
-                for item in result:
-                    if item['custom_thumb'] and item['custom_thumb'] != item['library_thumb']:
-                        library_thumb = item['custom_thumb']
-                    elif item['library_thumb']:
-                        library_thumb = item['library_thumb']
-                    else:
-                        library_thumb = common.DEFAULT_COVER_THUMB
-
-                    if item['custom_art'] and item['custom_art'] != item['library_art']:
-                        library_art = item['custom_art']
-                    elif item['library_art'] == common.DEFAULT_LIVE_TV_ART_FULL:
-                        library_art = common.DEFAULT_LIVE_TV_ART
-                    else:
-                        library_art = item['library_art']
-
-                    if not item['grandparent_thumb'] or item['grandparent_thumb'] == '':
-                        thumb = item['thumb']
-                    else:
-                        thumb = item['grandparent_thumb']
-
-                    row = {
-                        'total_plays': item['total_plays'],
-                        'total_duration': item['total_duration'],
-                        'section_type': item['section_type'],
-                        'section_name': item['section_name'],
-                        'section_id': item['section_id'],
-                        'last_play': item['last_watch'],
-                        'library_thumb': library_thumb,
-                        'library_art': library_art,
-                        'thumb': thumb,
-                        'grandparent_thumb': item['grandparent_thumb'],
-                        'art': item['art'],
-                        'user': '',
-                        'friendly_name': '',
-                        'users_watched': '',
-                        'platform': '',
-                        'title': item['full_title'],
-                        'grandparent_title': item['grandparent_title'],
-                        'grandchild_title': item['title'],
-                        'year': item['year'],
-                        'media_index': item['media_index'],
-                        'parent_media_index': item['parent_media_index'],
-                        'rating_key': item['rating_key'],
-                        'grandparent_rating_key': item['grandparent_rating_key'],
-                        'media_type': item['media_type'],
-                        'content_rating': item['content_rating'],
-                        'labels': item['labels'].split(';') if item['labels'] else (),
-                        'live': item['live'],
-                        'guid': item['guid'],
-                        'row_id': item['id']
-                    }
-                    top_libraries.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_type': sort_type,
-                                   'stat_title': 'Most Active Libraries',
-                                   'rows': session.mask_session_info(top_libraries)})
-
-            elif stat == 'top_users':
-                top_users = []
-                try:
-                    query = "SELECT MAX(session_history.id) AS id, MAX(shm.title) AS title, " \
-                            "MAX(shm.grandparent_title) AS grandparent_title, MAX(shm.full_title) AS full_title, " \
-                            "MAX(shm.year) AS year, MAX(shm.media_index) AS media_index, " \
-                            "MAX(shm.parent_media_index) AS parent_media_index, " \
-                            "MAX(session_history.rating_key) AS rating_key, " \
-                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
-                            "MAX(shm.thumb) AS thumb, MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
-                            "MAX(session_history.user) AS user, session_history.user_id AS user_id, " \
-                            "MAX(session_history.player) AS player, MAX(session_history.section_id) AS section_id, " \
-                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
-                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
-                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
-                            "MAX(u.thumb) AS user_thumb, MAX(u.custom_avatar_url) AS custom_thumb, " \
-                            "MAX((CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = ''" \
-                            "   THEN u.username ELSE u.friendly_name END)) AS friendly_name, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
-                            "LEFT OUTER JOIN users AS u ON session_history.user_id = u.user_id " \
-                            "WHERE %s %s " \
-                            "GROUP BY session_history.user_id " \
-                            "ORDER BY %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe[4:], where_id,
-                                                     sort_type, stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_users: %s." % e)
-                    return None
-
-                for item in result:
-                    if item['custom_thumb'] and item['custom_thumb'] != item['user_thumb']:
-                        user_thumb = item['custom_thumb']
-                    elif item['user_thumb']:
-                        user_thumb = item['user_thumb']
-                    else:
-                        user_thumb = common.DEFAULT_USER_THUMB
-
-                    if not item['grandparent_thumb'] or item['grandparent_thumb'] == '':
-                        thumb = item['thumb']
-                    else:
-                        thumb = item['grandparent_thumb']
-
-                    row = {'user': item['user'],
-                           'user_id': item['user_id'],
-                           'friendly_name': item['friendly_name'],
-                           'total_plays': item['total_plays'],
-                           'total_duration': item['total_duration'],
-                           'last_play': item['last_watch'],
-                           'user_thumb': user_thumb,
-                           'thumb': thumb,
-                           'grandparent_thumb': item['grandparent_thumb'],
-                           'art': item['art'],
-                           'users_watched': '',
-                           'platform': '',
-                           'title': item['full_title'],
-                           'grandparent_title': item['grandparent_title'],
-                           'grandchild_title': item['title'],
-                           'year': item['year'],
-                           'media_index': item['media_index'],
-                           'parent_media_index': item['parent_media_index'],
-                           'rating_key': item['rating_key'],
-                           'grandparent_rating_key': item['grandparent_rating_key'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'row_id': item['id']
-                           }
-                    top_users.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_type': sort_type,
-                                   'stat_title': 'Most Active Users',
-                                   'rows': session.mask_session_info(top_users)})
-
-            elif stat == 'top_platforms':
-                top_platform = []
-
-                try:
-                    query = "SELECT session_history.platform, " \
-                            "MAX(session_history.started) AS last_watch, " \
-                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
-                            "FROM session_history " \
-                            "WHERE %s %s " \
-                            "GROUP BY session_history.platform " \
-                            "ORDER BY %s DESC, last_watch DESC " \
-                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe[4:], where_id, sort_type,
-                                                     stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_platforms: %s." % e)
-                    return None
-
-                for item in result:
-                    # Rename Mystery platform names
-                    platform = common.PLATFORM_NAME_OVERRIDES.get(item['platform'], item['platform'])
-                    platform_name = next((v for k, v in common.PLATFORM_NAMES.items() if k in platform.lower()), 'default')
-
-                    row = {'total_plays': item['total_plays'],
-                           'total_duration': item['total_duration'],
-                           'last_play': item['last_watch'],
-                           'platform': platform,
-                           'platform_name': platform_name,
-                           'title': '',
-                           'thumb': '',
-                           'grandparent_thumb': '',
-                           'art': '',
-                           'users_watched': '',
-                           'rating_key': '',
-                           'grandparent_rating_key': '',
-                           'user': '',
-                           'friendly_name': '',
-                           'row_id': ''
-                           }
-                    top_platform.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_type': sort_type,
-                                   'stat_title': 'Most Active Platforms',
-                                   'rows': session.mask_session_info(top_platform, mask_metadata=False)})
-
-            elif stat == 'last_watched':
-
-                movie_watched_percent = plexpy.CONFIG.MOVIE_WATCHED_PERCENT
-                tv_watched_percent = plexpy.CONFIG.TV_WATCHED_PERCENT
-
-                view_offset_expr = "(CASE WHEN sh.view_offset IS NULL THEN 0.1 ELSE sh.view_offset * 1.0 END)"
-                duration_expr_watched = "(CASE WHEN shm.duration IS NULL THEN 1.0 ELSE shm.duration * 1.0 END)"
-                percent_complete_expr = "(%s / %s * 100)" % (view_offset_expr, duration_expr_watched)
-
-                if plexpy.CONFIG.WATCHED_MARKER == 1:
-                    watched_threshold_expr = (
-                        "(CASE WHEN shm.marker_credits_final IS NULL "
-                        "THEN %s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
-                        "ELSE shm.marker_credits_final END)"
-                    ) % (duration_expr_watched, movie_watched_percent, tv_watched_percent)
-                    watched_where = "%s >= %s" % (view_offset_expr, watched_threshold_expr)
-                elif plexpy.CONFIG.WATCHED_MARKER == 2:
-                    watched_threshold_expr = (
-                        "(CASE WHEN shm.marker_credits_first IS NULL "
-                        "THEN %s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
-                        "ELSE shm.marker_credits_first END)"
-                    ) % (duration_expr_watched, movie_watched_percent, tv_watched_percent)
-                    watched_where = "%s >= %s" % (view_offset_expr, watched_threshold_expr)
-                elif plexpy.CONFIG.WATCHED_MARKER == 3:
-                    watched_threshold_expr = (
-                        "LEAST("
-                        "(CASE WHEN shm.marker_credits_first IS NULL "
-                        "THEN %s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
-                        "ELSE shm.marker_credits_first END), "
-                        "%s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0)"
-                    ) % (duration_expr_watched, movie_watched_percent, tv_watched_percent,
-                         duration_expr_watched, movie_watched_percent, tv_watched_percent)
-                    watched_where = "%s >= %s" % (view_offset_expr, watched_threshold_expr)
-                else:
-                    watched_threshold_expr = "NULL"
-                    watched_where = (
-                        "(sh.media_type = 'movie' AND %s >= %d) "
-                        "OR (sh.media_type = 'episode' AND %s >= %d)"
-                    ) % (percent_complete_expr, movie_watched_percent,
-                         percent_complete_expr, tv_watched_percent)
-
-                last_watched = []
-                try:
-                    query = "SELECT sh.id, shm.title, shm.grandparent_title, shm.full_title, shm.year, " \
-                            "shm.media_index, shm.parent_media_index, " \
-                            "sh.rating_key, shm.grandparent_rating_key, shm.thumb, shm.grandparent_thumb, " \
-                            "sh.user, sh.user_id, u.custom_avatar_url as user_thumb, sh.player, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, shm.live, shm.guid, " \
-                            "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = ''" \
-                            "   THEN u.username ELSE u.friendly_name END) " \
-                            "   AS friendly_name, " \
-                            "sh.started AS last_watch, %s AS _view_offset, %s AS _duration, " \
-                            "%s AS percent_complete, " \
-                            "%s AS watched_threshold " \
-                            "FROM (SELECT DISTINCT ON (%s) session_history.* " \
-                            "   FROM session_history " \
-                            "   WHERE (session_history.media_type = 'movie' " \
-                            "           OR session_history.media_type = 'episode') %s %s " \
-                            "   ORDER BY %s, session_history.started DESC, session_history.id DESC) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
-                            "LEFT OUTER JOIN users AS u ON sh.user_id = u.user_id " \
-                            "WHERE %s " \
-                            "ORDER BY last_watch DESC " \
-                            "LIMIT %s OFFSET %s" % (view_offset_expr, duration_expr_watched, percent_complete_expr,
-                                                    watched_threshold_expr, group_key, where_timeframe, where_id,
-                                                    group_key, watched_where, stats_count, stats_start)
-                    result = monitor_db.select(query)
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: last_watched: %s." % e)
-                    return None
-
-                for item in result:
-                    if not item['grandparent_thumb'] or item['grandparent_thumb'] == '':
-                        thumb = item['thumb']
-                    else:
-                        thumb = item['grandparent_thumb']
-
-                    row = {'row_id': item['id'],
-                           'user': item['user'],
-                           'friendly_name': item['friendly_name'],
-                           'user_id': item['user_id'],
-                           'user_thumb': item['user_thumb'],
-                           'title': item['full_title'],
-                           'grandparent_title': item['grandparent_title'],
-                           'grandchild_title': item['title'],
-                           'year': item['year'],
-                           'media_index': item['media_index'],
-                           'parent_media_index': item['parent_media_index'],
-                           'rating_key': item['rating_key'],
-                           'grandparent_rating_key': item['grandparent_rating_key'],
-                           'thumb': thumb,
-                           'grandparent_thumb': item['grandparent_thumb'],
-                           'art': item['art'],
-                           'section_id': item['section_id'],
-                           'media_type': item['media_type'],
-                           'content_rating': item['content_rating'],
-                           'labels': item['labels'].split(';') if item['labels'] else (),
-                           'last_watch': item['last_watch'],
-                           'live': item['live'],
-                           'guid': item['guid'],
-                           'player': item['player']
-                           }
-                    last_watched.append(row)
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_title': 'Recently Watched',
-                                   'rows': session.mask_session_info(last_watched)})
-
-            elif stat == 'most_concurrent':
-
-                def calc_most_concurrent(title, result):
-                    '''
-                    Function to calculate most concurrent streams
-                    Input: Stat title, SQLite query result
-                    Output: Dict {title, count, started, stopped}
-                    '''
-                    times = []
                     for item in result:
-                        times.append({'time': str(item['started']) + 'B', 'count': 1})
-                        times.append({'time': str(item['stopped']) + 'A', 'count': -1})
-                    times = sorted(times, key=lambda k: k['time'])
+                        row = {'title': item['full_title'],
+                               'year': item['year'],
+                               'total_plays': item['total_plays'],
+                               'total_duration': item['total_duration'],
+                               'users_watched': '',
+                               'rating_key': item['rating_key'],
+                               'grandparent_rating_key': '',
+                               'last_play': item['last_watch'],
+                               'grandparent_thumb': '',
+                               'thumb': item['thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'user': '',
+                               'friendly_name': '',
+                               'platform': '',
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        top_movies.append(row)
 
-                    count = 0
-                    last_count = 0
-                    last_start = ''
-                    concurrent = {'title': title,
-                                  'count': 0,
-                                  'started': None,
-                                  'stopped': None
-                                  }
+                    home_stats.append({'stat_id': stat,
+                                       'stat_type': sort_type,
+                                       'stat_title': 'Most Watched Movies',
+                                       'rows': session.mask_session_info(top_movies)})
 
-                    for d in times:
-                        if d['count'] == 1:
-                            count += d['count']
-                            if count >= last_count:
-                                last_start = d['time']
+                elif stat == 'popular_movies':
+                    popular_movies = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        users_watched_expr = func.count(distinct(SessionHistory.user_id)).label('users_watched')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                SessionHistoryMetadata.full_title,
+                                SessionHistoryMetadata.year,
+                                func.max(SessionHistory.rating_key).label('rating_key'),
+                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistory.started).label('started'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                users_watched_expr,
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.media_type == 'movie')
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistoryMetadata.full_title, SessionHistoryMetadata.year)
+                            .order_by(users_watched_expr.desc(), sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_movies: %s." % e)
+                        return None
+
+                    for item in result:
+                        row = {'title': item['full_title'],
+                               'year': item['year'],
+                               'users_watched': item['users_watched'],
+                               'rating_key': item['rating_key'],
+                               'grandparent_rating_key': '',
+                               'last_play': item['last_watch'],
+                               'total_plays': item['total_plays'],
+                               'grandparent_thumb': '',
+                               'thumb': item['thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'user': '',
+                               'friendly_name': '',
+                               'platform': '',
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        popular_movies.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_title': 'Most Popular Movies',
+                                       'rows': session.mask_session_info(popular_movies)})
+
+                elif stat == 'top_tv':
+                    top_tv = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                SessionHistoryMetadata.grandparent_title,
+                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.year).label('year'),
+                                func.max(SessionHistory.rating_key).label('rating_key'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistory.started).label('started'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.media_type == 'episode')
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistoryMetadata.grandparent_title)
+                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_tv: %s." % e)
+                        return None
+
+                    for item in result:
+                        row = {'title': item['grandparent_title'],
+                               'year': item['year'],
+                               'total_plays': item['total_plays'],
+                               'total_duration': item['total_duration'],
+                               'users_watched': '',
+                               'rating_key': item['rating_key'] if item['live'] else item['grandparent_rating_key'],
+                               'grandparent_rating_key': item['grandparent_rating_key'],
+                               'last_play': item['last_watch'],
+                               'grandparent_thumb': item['grandparent_thumb'],
+                               'thumb': item['grandparent_thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'user': '',
+                               'friendly_name': '',
+                               'platform': '',
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        top_tv.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_type': sort_type,
+                                       'stat_title': 'Most Watched TV Shows',
+                                       'rows': session.mask_session_info(top_tv)})
+
+                elif stat == 'popular_tv':
+                    popular_tv = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        users_watched_expr = func.count(distinct(SessionHistory.user_id)).label('users_watched')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                SessionHistoryMetadata.grandparent_title,
+                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.year).label('year'),
+                                func.max(SessionHistory.rating_key).label('rating_key'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistory.started).label('started'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                users_watched_expr,
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.media_type == 'episode')
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistoryMetadata.grandparent_title)
+                            .order_by(users_watched_expr.desc(), sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_tv: %s." % e)
+                        return None
+
+                    for item in result:
+                        row = {'title': item['grandparent_title'],
+                               'year': item['year'],
+                               'users_watched': item['users_watched'],
+                               'rating_key': item['rating_key'] if item['live'] else item['grandparent_rating_key'],
+                               'grandparent_rating_key': item['grandparent_rating_key'],
+                               'last_play': item['last_watch'],
+                               'total_plays': item['total_plays'],
+                               'grandparent_thumb': item['grandparent_thumb'],
+                               'thumb': item['grandparent_thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'user': '',
+                               'friendly_name': '',
+                               'platform': '',
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        popular_tv.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_title': 'Most Popular TV Shows',
+                                       'rows': session.mask_session_info(popular_tv)})
+
+                elif stat == 'top_music':
+                    top_music = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                SessionHistoryMetadata.grandparent_title,
+                                SessionHistoryMetadata.original_title,
+                                func.max(SessionHistoryMetadata.year).label('year'),
+                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistory.started).label('started'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.media_type == 'track')
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistoryMetadata.original_title, SessionHistoryMetadata.grandparent_title)
+                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_music: %s." % e)
+                        return None
+
+                    for item in result:
+                        row = {'title': item['original_title'] or item['grandparent_title'],
+                               'year': item['year'],
+                               'total_plays': item['total_plays'],
+                               'total_duration': item['total_duration'],
+                               'users_watched': '',
+                               'rating_key': item['grandparent_rating_key'],
+                               'grandparent_rating_key': item['grandparent_rating_key'],
+                               'last_play': item['last_watch'],
+                               'grandparent_thumb': item['grandparent_thumb'],
+                               'thumb': item['grandparent_thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'user': '',
+                               'friendly_name': '',
+                               'platform': '',
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        top_music.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_type': sort_type,
+                                       'stat_title': 'Most Played Artists',
+                                       'rows': session.mask_session_info(top_music)})
+
+                elif stat == 'popular_music':
+                    popular_music = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        users_watched_expr = func.count(distinct(SessionHistory.user_id)).label('users_watched')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                SessionHistoryMetadata.grandparent_title,
+                                SessionHistoryMetadata.original_title,
+                                func.max(SessionHistoryMetadata.year).label('year'),
+                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistory.started).label('started'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                users_watched_expr,
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.media_type == 'track')
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistoryMetadata.original_title, SessionHistoryMetadata.grandparent_title)
+                            .order_by(users_watched_expr.desc(), sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_music: %s." % e)
+                        return None
+
+                    for item in result:
+                        row = {'title': item['original_title'] or item['grandparent_title'],
+                               'year': item['year'],
+                               'users_watched': item['users_watched'],
+                               'rating_key': item['grandparent_rating_key'],
+                               'grandparent_rating_key': item['grandparent_rating_key'],
+                               'last_play': item['last_watch'],
+                               'total_plays': item['total_plays'],
+                               'grandparent_thumb': item['grandparent_thumb'],
+                               'thumb': item['grandparent_thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'user': '',
+                               'friendly_name': '',
+                               'platform': '',
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        popular_music.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_title': 'Most Popular Artists',
+                                       'rows': session.mask_session_info(popular_music)})
+
+                elif stat == 'top_libraries':
+                    top_libraries = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                func.max(SessionHistoryMetadata.title).label('title'),
+                                func.max(SessionHistoryMetadata.grandparent_title).label('grandparent_title'),
+                                func.max(SessionHistoryMetadata.full_title).label('full_title'),
+                                func.max(SessionHistoryMetadata.year).label('year'),
+                                func.max(SessionHistoryMetadata.media_index).label('media_index'),
+                                func.max(SessionHistoryMetadata.parent_media_index).label('parent_media_index'),
+                                func.max(SessionHistory.rating_key).label('rating_key'),
+                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
+                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
+                                func.max(SessionHistory.user).label('user'),
+                                func.max(SessionHistory.user_id).label('user_id'),
+                                func.max(SessionHistory.player).label('player'),
+                                SessionHistory.section_id.label('section_id'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                func.max(LibrarySection.section_name).label('section_name'),
+                                func.max(LibrarySection.section_type).label('section_type'),
+                                func.max(LibrarySection.thumb).label('library_thumb'),
+                                func.max(LibrarySection.custom_thumb_url).label('custom_thumb'),
+                                func.max(LibrarySection.art).label('library_art'),
+                                func.max(LibrarySection.custom_art_url).label('custom_art'),
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .outerjoin(
+                                LibrarySection,
+                                and_(
+                                    SessionHistory.section_id == LibrarySection.section_id,
+                                    LibrarySection.deleted_section == 0,
+                                ),
+                            )
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistory.section_id)
+                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_libraries: %s." % e)
+                        return None
+
+                    for item in result:
+                        if item['custom_thumb'] and item['custom_thumb'] != item['library_thumb']:
+                            library_thumb = item['custom_thumb']
+                        elif item['library_thumb']:
+                            library_thumb = item['library_thumb']
                         else:
-                            if count >= last_count:
-                                last_count = count
-                                concurrent['count'] = count
-                                concurrent['started'] = last_start[:-1]
-                                concurrent['stopped'] = d['time'][:-1]
-                            count += d['count']
+                            library_thumb = common.DEFAULT_COVER_THUMB
 
-                    return concurrent
+                        if item['custom_art'] and item['custom_art'] != item['library_art']:
+                            library_art = item['custom_art']
+                        elif item['library_art'] == common.DEFAULT_LIVE_TV_ART_FULL:
+                            library_art = common.DEFAULT_LIVE_TV_ART
+                        else:
+                            library_art = item['library_art']
 
-                most_concurrent = []
+                        if not item['grandparent_thumb'] or item['grandparent_thumb'] == '':
+                            thumb = item['thumb']
+                        else:
+                            thumb = item['grandparent_thumb']
 
-                try:
-                    base_query = "SELECT sh.started, sh.stopped " \
-                                 "FROM session_history AS sh " \
-                                 "JOIN session_history_media_info AS shmi ON sh.id = shmi.id " \
-                                 "WHERE %s " % where_timeframe[4:].replace('session_history.', 'sh.')
+                        row = {
+                            'total_plays': item['total_plays'],
+                            'total_duration': item['total_duration'],
+                            'section_type': item['section_type'],
+                            'section_name': item['section_name'],
+                            'section_id': item['section_id'],
+                            'last_play': item['last_watch'],
+                            'library_thumb': library_thumb,
+                            'library_art': library_art,
+                            'thumb': thumb,
+                            'grandparent_thumb': item['grandparent_thumb'],
+                            'art': item['art'],
+                            'user': '',
+                            'friendly_name': '',
+                            'users_watched': '',
+                            'platform': '',
+                            'title': item['full_title'],
+                            'grandparent_title': item['grandparent_title'],
+                            'grandchild_title': item['title'],
+                            'year': item['year'],
+                            'media_index': item['media_index'],
+                            'parent_media_index': item['parent_media_index'],
+                            'rating_key': item['rating_key'],
+                            'grandparent_rating_key': item['grandparent_rating_key'],
+                            'media_type': item['media_type'],
+                            'content_rating': item['content_rating'],
+                            'labels': item['labels'].split(';') if item['labels'] else (),
+                            'live': item['live'],
+                            'guid': item['guid'],
+                            'row_id': item['id']
+                        }
+                        top_libraries.append(row)
 
-                    title = 'Concurrent Streams'
-                    query = base_query
-                    result = monitor_db.select(query)
+                    home_stats.append({'stat_id': stat,
+                                       'stat_type': sort_type,
+                                       'stat_title': 'Most Active Libraries',
+                                       'rows': session.mask_session_info(top_libraries)})
+
+                elif stat == 'top_users':
+                    top_users = []
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                func.max(SessionHistory.id).label('id'),
+                                func.max(SessionHistoryMetadata.title).label('title'),
+                                func.max(SessionHistoryMetadata.grandparent_title).label('grandparent_title'),
+                                func.max(SessionHistoryMetadata.full_title).label('full_title'),
+                                func.max(SessionHistoryMetadata.year).label('year'),
+                                func.max(SessionHistoryMetadata.media_index).label('media_index'),
+                                func.max(SessionHistoryMetadata.parent_media_index).label('parent_media_index'),
+                                func.max(SessionHistory.rating_key).label('rating_key'),
+                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
+                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
+                                func.max(SessionHistory.user).label('user'),
+                                SessionHistory.user_id.label('user_id'),
+                                func.max(SessionHistory.player).label('player'),
+                                func.max(SessionHistory.section_id).label('section_id'),
+                                func.max(SessionHistoryMetadata.art).label('art'),
+                                func.max(SessionHistory.media_type).label('media_type'),
+                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
+                                func.max(SessionHistoryMetadata.labels).label('labels'),
+                                func.max(SessionHistoryMetadata.live).label('live'),
+                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                func.max(User.thumb).label('user_thumb'),
+                                func.max(User.custom_avatar_url).label('custom_thumb'),
+                                func.max(friendly_name_expr).label('friendly_name'),
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .outerjoin(User, SessionHistory.user_id == User.user_id)
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistory.user_id)
+                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_users: %s." % e)
+                        return None
+
+                    for item in result:
+                        if item['custom_thumb'] and item['custom_thumb'] != item['user_thumb']:
+                            user_thumb = item['custom_thumb']
+                        elif item['user_thumb']:
+                            user_thumb = item['user_thumb']
+                        else:
+                            user_thumb = common.DEFAULT_USER_THUMB
+
+                        if not item['grandparent_thumb'] or item['grandparent_thumb'] == '':
+                            thumb = item['thumb']
+                        else:
+                            thumb = item['grandparent_thumb']
+
+                        row = {'user': item['user'],
+                               'user_id': item['user_id'],
+                               'friendly_name': item['friendly_name'],
+                               'total_plays': item['total_plays'],
+                               'total_duration': item['total_duration'],
+                               'last_play': item['last_watch'],
+                               'user_thumb': user_thumb,
+                               'thumb': thumb,
+                               'grandparent_thumb': item['grandparent_thumb'],
+                               'art': item['art'],
+                               'users_watched': '',
+                               'platform': '',
+                               'title': item['full_title'],
+                               'grandparent_title': item['grandparent_title'],
+                               'grandchild_title': item['title'],
+                               'year': item['year'],
+                               'media_index': item['media_index'],
+                               'parent_media_index': item['parent_media_index'],
+                               'rating_key': item['rating_key'],
+                               'grandparent_rating_key': item['grandparent_rating_key'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'row_id': item['id']
+                               }
+                        top_users.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_type': sort_type,
+                                       'stat_title': 'Most Active Users',
+                                       'rows': session.mask_session_info(top_users)})
+
+                elif stat == 'top_platforms':
+                    top_platform = []
+
+                    try:
+                        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+                        total_duration_expr = func.sum(duration_expr).label('total_duration')
+                        last_watch_expr = func.max(SessionHistory.started).label('last_watch')
+                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
+
+                        stmt = (
+                            select(
+                                SessionHistory.platform,
+                                last_watch_expr,
+                                total_plays_expr,
+                                total_duration_expr,
+                            )
+                            .select_from(SessionHistory)
+                        )
+                        stmt = apply_filters(stmt)
+                        stmt = (
+                            stmt.group_by(SessionHistory.platform)
+                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_platforms: %s." % e)
+                        return None
+
+                    for item in result:
+                        # Rename Mystery platform names
+                        platform = common.PLATFORM_NAME_OVERRIDES.get(item['platform'], item['platform'])
+                        platform_name = next((v for k, v in common.PLATFORM_NAMES.items() if k in platform.lower()), 'default')
+
+                        row = {'total_plays': item['total_plays'],
+                               'total_duration': item['total_duration'],
+                               'last_play': item['last_watch'],
+                               'platform': platform,
+                               'platform_name': platform_name,
+                               'title': '',
+                               'thumb': '',
+                               'grandparent_thumb': '',
+                               'art': '',
+                               'users_watched': '',
+                               'rating_key': '',
+                               'grandparent_rating_key': '',
+                               'user': '',
+                               'friendly_name': '',
+                               'row_id': ''
+                               }
+                        top_platform.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_type': sort_type,
+                                       'stat_title': 'Most Active Platforms',
+                                       'rows': session.mask_session_info(top_platform, mask_metadata=False)})
+
+                elif stat == 'last_watched':
+
+                    movie_watched_percent = plexpy.CONFIG.MOVIE_WATCHED_PERCENT
+                    tv_watched_percent = plexpy.CONFIG.TV_WATCHED_PERCENT
+
+                    last_watched = []
+                    try:
+                        base_stmt = (
+                            select(SessionHistory)
+                            .where(SessionHistory.media_type.in_(['movie', 'episode']))
+                        )
+                        base_stmt = apply_filters(base_stmt)
+                        base_stmt = (
+                            base_stmt.distinct(group_key)
+                            .order_by(group_key, SessionHistory.started.desc(), SessionHistory.id.desc())
+                        )
+                        sh_subquery = base_stmt.subquery()
+                        sh = aliased(SessionHistory, sh_subquery)
+
+                        view_offset_expr = case(
+                            (sh.view_offset.is_(None), literal(0.1)),
+                            else_=cast(sh.view_offset, Float),
+                        )
+                        duration_expr_watched = case(
+                            (SessionHistoryMetadata.duration.is_(None), literal(1.0)),
+                            else_=cast(SessionHistoryMetadata.duration, Float),
+                        )
+                        percent_complete_expr = (view_offset_expr / duration_expr_watched * 100)
+                        percent_threshold_expr = duration_expr_watched * case(
+                            (sh.media_type == 'movie', movie_watched_percent),
+                            else_=tv_watched_percent,
+                        ) / 100.0
+
+                        if plexpy.CONFIG.WATCHED_MARKER == 1:
+                            watched_threshold_expr = case(
+                                (SessionHistoryMetadata.marker_credits_final.is_(None), percent_threshold_expr),
+                                else_=SessionHistoryMetadata.marker_credits_final,
+                            )
+                            watched_where = view_offset_expr >= watched_threshold_expr
+                        elif plexpy.CONFIG.WATCHED_MARKER == 2:
+                            watched_threshold_expr = case(
+                                (SessionHistoryMetadata.marker_credits_first.is_(None), percent_threshold_expr),
+                                else_=SessionHistoryMetadata.marker_credits_first,
+                            )
+                            watched_where = view_offset_expr >= watched_threshold_expr
+                        elif plexpy.CONFIG.WATCHED_MARKER == 3:
+                            first_marker = case(
+                                (SessionHistoryMetadata.marker_credits_first.is_(None), percent_threshold_expr),
+                                else_=SessionHistoryMetadata.marker_credits_first,
+                            )
+                            watched_threshold_expr = func.least(first_marker, percent_threshold_expr)
+                            watched_where = view_offset_expr >= watched_threshold_expr
+                        else:
+                            watched_threshold_expr = literal(None)
+                            watched_where = or_(
+                                and_(sh.media_type == 'movie', percent_complete_expr >= movie_watched_percent),
+                                and_(sh.media_type == 'episode', percent_complete_expr >= tv_watched_percent),
+                            )
+
+                        stmt = (
+                            select(
+                                sh.id,
+                                SessionHistoryMetadata.title,
+                                SessionHistoryMetadata.grandparent_title,
+                                SessionHistoryMetadata.full_title,
+                                SessionHistoryMetadata.year,
+                                SessionHistoryMetadata.media_index,
+                                SessionHistoryMetadata.parent_media_index,
+                                sh.rating_key,
+                                SessionHistoryMetadata.grandparent_rating_key,
+                                SessionHistoryMetadata.thumb,
+                                SessionHistoryMetadata.grandparent_thumb,
+                                sh.user,
+                                sh.user_id,
+                                User.custom_avatar_url.label('user_thumb'),
+                                sh.player,
+                                sh.section_id,
+                                SessionHistoryMetadata.art,
+                                sh.media_type,
+                                SessionHistoryMetadata.content_rating,
+                                SessionHistoryMetadata.labels,
+                                SessionHistoryMetadata.live,
+                                SessionHistoryMetadata.guid,
+                                friendly_name_expr.label('friendly_name'),
+                                sh.started.label('last_watch'),
+                                view_offset_expr.label('_view_offset'),
+                                duration_expr_watched.label('_duration'),
+                                percent_complete_expr.label('percent_complete'),
+                                watched_threshold_expr.label('watched_threshold'),
+                            )
+                            .select_from(sh)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == sh.id)
+                            .outerjoin(User, sh.user_id == User.user_id)
+                            .where(watched_where)
+                            .order_by(sh.started.desc())
+                        )
+                        stmt = queries.apply_pagination(stmt, stats_start, stats_count)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: last_watched: %s." % e)
+                        return None
+
+                    for item in result:
+                        if not item['grandparent_thumb'] or item['grandparent_thumb'] == '':
+                            thumb = item['thumb']
+                        else:
+                            thumb = item['grandparent_thumb']
+
+                        row = {'row_id': item['id'],
+                               'user': item['user'],
+                               'friendly_name': item['friendly_name'],
+                               'user_id': item['user_id'],
+                               'user_thumb': item['user_thumb'],
+                               'title': item['full_title'],
+                               'grandparent_title': item['grandparent_title'],
+                               'grandchild_title': item['title'],
+                               'year': item['year'],
+                               'media_index': item['media_index'],
+                               'parent_media_index': item['parent_media_index'],
+                               'rating_key': item['rating_key'],
+                               'grandparent_rating_key': item['grandparent_rating_key'],
+                               'thumb': thumb,
+                               'grandparent_thumb': item['grandparent_thumb'],
+                               'art': item['art'],
+                               'section_id': item['section_id'],
+                               'media_type': item['media_type'],
+                               'content_rating': item['content_rating'],
+                               'labels': item['labels'].split(';') if item['labels'] else (),
+                               'last_watch': item['last_watch'],
+                               'live': item['live'],
+                               'guid': item['guid'],
+                               'player': item['player']
+                               }
+                        last_watched.append(row)
+
+                    home_stats.append({'stat_id': stat,
+                                       'stat_title': 'Recently Watched',
+                                       'rows': session.mask_session_info(last_watched)})
+
+                elif stat == 'most_concurrent':
+
+                    def calc_most_concurrent(title, result):
+                        times = []
+                        for item in result:
+                            times.append({'time': str(item['started']) + 'B', 'count': 1})
+                            times.append({'time': str(item['stopped']) + 'A', 'count': -1})
+                        times = sorted(times, key=lambda k: k['time'])
+
+                        count = 0
+                        last_count = 0
+                        last_start = ''
+                        concurrent = {'title': title,
+                                      'count': 0,
+                                      'started': None,
+                                      'stopped': None
+                                      }
+
+                        for d in times:
+                            if d['count'] == 1:
+                                count += d['count']
+                                if count >= last_count:
+                                    last_start = d['time']
+                            else:
+                                if count >= last_count:
+                                    last_count = count
+                                    concurrent['count'] = count
+                                    concurrent['started'] = last_start[:-1]
+                                    concurrent['stopped'] = d['time'][:-1]
+                                count += d['count']
+
+                        return concurrent
+
+                    most_concurrent = []
+
+                    try:
+                        stmt = (
+                            select(
+                                SessionHistory.started,
+                                SessionHistory.stopped,
+                                SessionHistoryMediaInfo.transcode_decision,
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+                        )
+                        stmt = apply_filters(stmt)
+                        result = queries.fetch_mappings(db_session, stmt)
+                    except Exception as e:
+                        logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: most_concurrent: %s." % e)
+                        return None
+
                     if result:
-                        most_concurrent.append(calc_most_concurrent(title, result))
+                        most_concurrent.append(calc_most_concurrent('Concurrent Streams', result))
 
-                    title = 'Concurrent Transcodes'
-                    query = base_query \
-                          + "AND shmi.transcode_decision = 'transcode' "
-                    result = monitor_db.select(query)
-                    if result:
-                        most_concurrent.append(calc_most_concurrent(title, result))
+                        decision_map = (
+                            ('transcode', 'Concurrent Transcodes'),
+                            ('copy', 'Concurrent Direct Streams'),
+                            ('direct play', 'Concurrent Direct Plays'),
+                        )
 
-                    title = 'Concurrent Direct Streams'
-                    query = base_query \
-                          + "AND shmi.transcode_decision = 'copy' "
-                    result = monitor_db.select(query)
-                    if result:
-                        most_concurrent.append(calc_most_concurrent(title, result))
+                        for decision, title in decision_map:
+                            filtered = [row for row in result if row['transcode_decision'] == decision]
+                            if filtered:
+                                most_concurrent.append(calc_most_concurrent(title, filtered))
 
-                    title = 'Concurrent Direct Plays'
-                    query = base_query \
-                          + "AND shmi.transcode_decision = 'direct play' "
-                    result = monitor_db.select(query)
-                    if result:
-                        most_concurrent.append(calc_most_concurrent(title, result))
-                except Exception as e:
-                    logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: most_concurrent: %s." % e)
-                    return None
-
-                home_stats.append({'stat_id': stat,
-                                   'stat_title': 'Most Concurrent Streams',
-                                   'rows': most_concurrent})
+                    home_stats.append({'stat_id': stat,
+                                       'stat_title': 'Most Concurrent Streams',
+                                       'rows': most_concurrent})
 
         if stat_id and home_stats:
             return home_stats[0]
         return home_stats
 
     def get_library_stats(self, library_cards=[]):
-        monitor_db = database.MonitorDatabase()
-
         if session.get_session_shared_libraries():
             library_cards = session.get_session_shared_libraries()
+
+        library_ids = [helpers.cast_to_int(section_id) for section_id in library_cards if str(section_id).isdigit()]
+        if not library_ids:
+            return None
 
         library_stats = []
 
         try:
-            query = "SELECT ls.id, ls.section_id, ls.section_name, ls.section_type, ls.thumb AS library_thumb, " \
-                    "ls.custom_thumb_url AS custom_thumb, ls.art AS library_art, ls.custom_art_url AS custom_art, " \
-                    "ls.count, ls.parent_count, ls.child_count, " \
-                    "sh.id, shm.title, shm.grandparent_title, shm.full_title, shm.year, " \
-                    "shm.media_index, shm.parent_media_index, " \
-                    "sh.rating_key, shm.grandparent_rating_key, shm.thumb, shm.grandparent_thumb, " \
-                    "sh.user, sh.user_id, sh.player, " \
-                    "shm.art, sh.media_type, shm.content_rating, shm.labels, shm.live, shm.guid, " \
-                    "sh.started AS last_watch " \
-                    "FROM library_sections AS ls " \
-                    "LEFT JOIN LATERAL (" \
-                    "   SELECT sh.id, sh.rating_key, sh.user, sh.user_id, sh.player, sh.section_id, " \
-                    "          sh.media_type, sh.started " \
-                    "   FROM session_history AS sh " \
-                    "   WHERE sh.section_id = ls.section_id " \
-                    "   ORDER BY sh.started DESC, sh.id DESC " \
-                    "   LIMIT 1" \
-                    ") AS sh ON TRUE " \
-                    "LEFT OUTER JOIN session_history_metadata AS shm ON sh.id = shm.id " \
-                    "WHERE ls.section_id IN (%s) AND ls.deleted_section = 0 " \
-                    "ORDER BY ls.section_type, ls.count DESC, ls.parent_count DESC, ls.child_count DESC " % ",".join(library_cards)
-            result = monitor_db.select(query)
+            latest_session = lateral(
+                select(
+                    SessionHistory.id.label('id'),
+                    SessionHistory.rating_key,
+                    SessionHistory.user,
+                    SessionHistory.user_id,
+                    SessionHistory.player,
+                    SessionHistory.section_id,
+                    SessionHistory.media_type,
+                    SessionHistory.started,
+                )
+                .where(SessionHistory.section_id == LibrarySection.section_id)
+                .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                .limit(1)
+            ).alias('sh')
+
+            stmt = (
+                select(
+                    LibrarySection.section_id,
+                    LibrarySection.section_name,
+                    LibrarySection.section_type,
+                    LibrarySection.thumb.label('library_thumb'),
+                    LibrarySection.custom_thumb_url.label('custom_thumb'),
+                    LibrarySection.art.label('library_art'),
+                    LibrarySection.custom_art_url.label('custom_art'),
+                    LibrarySection.count,
+                    LibrarySection.parent_count,
+                    LibrarySection.child_count,
+                    latest_session.c.id.label('id'),
+                    SessionHistoryMetadata.title,
+                    SessionHistoryMetadata.grandparent_title,
+                    SessionHistoryMetadata.full_title,
+                    SessionHistoryMetadata.year,
+                    SessionHistoryMetadata.media_index,
+                    SessionHistoryMetadata.parent_media_index,
+                    latest_session.c.rating_key,
+                    SessionHistoryMetadata.grandparent_rating_key,
+                    SessionHistoryMetadata.thumb,
+                    SessionHistoryMetadata.grandparent_thumb,
+                    latest_session.c.user,
+                    latest_session.c.user_id,
+                    latest_session.c.player,
+                    SessionHistoryMetadata.art,
+                    latest_session.c.media_type,
+                    SessionHistoryMetadata.content_rating,
+                    SessionHistoryMetadata.labels,
+                    SessionHistoryMetadata.live,
+                    SessionHistoryMetadata.guid,
+                    latest_session.c.started.label('last_watch'),
+                )
+                .select_from(LibrarySection)
+                .outerjoin(latest_session, true())
+                .outerjoin(SessionHistoryMetadata, latest_session.c.id == SessionHistoryMetadata.id)
+                .where(
+                    LibrarySection.section_id.in_(library_ids),
+                    LibrarySection.deleted_section == 0,
+                )
+                .order_by(
+                    LibrarySection.section_type,
+                    LibrarySection.count.desc(),
+                    LibrarySection.parent_count.desc(),
+                    LibrarySection.child_count.desc(),
+                )
+            )
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_library_stats: %s." % e)
             return None
@@ -1256,13 +1550,16 @@ class DataFactory(object):
 
         timestamp = helpers.timestamp()
 
-        monitor_db = database.MonitorDatabase()
-
         item_watch_time_stats = []
 
         section_ids = set()
 
-        group_by = 'session_history.reference_id' if grouping else 'session_history.id'
+        group_key = self._group_key_expr(grouping)
+        total_time_expr = (
+            func.sum(SessionHistory.stopped - SessionHistory.started)
+            - func.sum(func.coalesce(SessionHistory.paused_counter, 0))
+        ).label('total_time')
+        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
 
         if media_type in ('collection', 'playlist'):
             pms_connect = pmsconnect.PmsConnect()
@@ -1271,77 +1568,51 @@ class DataFactory(object):
         else:
             rating_keys = [rating_key]
 
-        rating_keys_arg = ','.join(['?'] * len(rating_keys))
+        rating_keys = [helpers.cast_to_int(key) for key in rating_keys if str(key).isdigit()]
+        rating_filter = None
+        if rating_keys:
+            rating_filter = or_(
+                SessionHistory.grandparent_rating_key.in_(rating_keys),
+                SessionHistory.parent_rating_key.in_(rating_keys),
+                SessionHistory.rating_key.in_(rating_keys),
+            )
 
         for days in query_days:
             timestamp_query = timestamp - days * 24 * 60 * 60
 
             try:
+                stmt = (
+                    select(
+                        total_time_expr,
+                        total_plays_expr,
+                        func.max(SessionHistory.section_id).label('section_id'),
+                    )
+                    .select_from(SessionHistory)
+                    .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                )
                 if days > 0:
-                    if str(rating_key).isdigit():
-                        query = "SELECT (SUM(stopped - started) - " \
-                                "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
-                                "FROM session_history " \
-                                "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                                "WHERE stopped >= ? " \
-                                "AND (session_history.grandparent_rating_key IN (%s) " \
-                                "OR session_history.parent_rating_key IN (%s) " \
-                                "OR session_history.rating_key IN (%s))" % (
-                                    group_by, rating_keys_arg, rating_keys_arg, rating_keys_arg
-                                )
-                        
-                        result = monitor_db.select(query, args=[timestamp_query] + rating_keys * 3)
-                    elif guid:
-                        query = "SELECT (SUM(stopped - started) - " \
-                                "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
-                                "FROM session_history " \
-                                "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                                "WHERE stopped >= ? " \
-                                "AND session_history_metadata.guid = ? " % group_by
+                    stmt = stmt.where(SessionHistory.stopped >= timestamp_query)
 
-                        result = monitor_db.select(query, args=[timestamp_query, guid])
-                    else:
-                        result = []
+                if rating_filter is not None:
+                    stmt = stmt.where(rating_filter)
+                elif guid:
+                    stmt = stmt.where(SessionHistoryMetadata.guid == guid)
                 else:
-                    if str(rating_key).isdigit():
-                        query = "SELECT (SUM(stopped - started) - " \
-                                "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
-                                "FROM session_history " \
-                                "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                                "WHERE (session_history.grandparent_rating_key IN (%s) " \
-                                "OR session_history.parent_rating_key IN (%s) " \
-                                "OR session_history.rating_key IN (%s))" % (
-                                    group_by, rating_keys_arg, rating_keys_arg, rating_keys_arg
-                                )
-                        
-                        result = monitor_db.select(query, args=rating_keys * 3)
-                    elif guid:
-                        query = "SELECT (SUM(stopped - started) - " \
-                                "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
-                                "FROM session_history " \
-                                "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                                "WHERE session_history_metadata.guid = ? " % group_by
+                    continue
 
-                        result = monitor_db.select(query, args=[guid])
-                    else:
-                        result = []
+                with session_scope() as db_session:
+                    result = queries.fetch_mapping(db_session, stmt, default={})
             except Exception as e:
                 logger.warn("Tautulli Libraries :: Unable to execute database query for get_watch_time_stats: %s." % e)
-                result = []
+                result = {}
 
-            for item in result:
-                section_ids.add(item['section_id'])
+            if result:
+                section_id = result.get('section_id')
+                if section_id is not None:
+                    section_ids.add(section_id)
 
-                if item['total_time']:
-                    total_time = item['total_time']
-                    total_plays = item['total_plays']
-                else:
-                    total_time = 0
-                    total_plays = 0
+                total_time = result.get('total_time') or 0
+                total_plays = result.get('total_plays') or 0
 
                 row = {'query_days': days,
                        'total_time': total_time,
@@ -1358,14 +1629,20 @@ class DataFactory(object):
     def get_user_stats(self, rating_key=None, guid=None, media_type=None, grouping=None):
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
-
-        monitor_db = database.MonitorDatabase()
-
         user_stats = []
 
         section_ids = set()
-        
-        group_by = 'session_history.reference_id' if grouping else 'session_history.id'
+
+        group_key = self._group_key_expr(grouping)
+        total_time_expr = (
+            func.sum(SessionHistory.stopped - SessionHistory.started)
+            - func.sum(func.coalesce(SessionHistory.paused_counter, 0))
+        ).label('total_time')
+        total_plays_expr = func.count(distinct(group_key)).label('total_plays')
+        friendly_name_expr = case(
+            (or_(User.friendly_name.is_(None), func.trim(User.friendly_name) == ''), User.username),
+            else_=User.friendly_name,
+        )
 
         if media_type in ('collection', 'playlist'):
             pms_connect = pmsconnect.PmsConnect()
@@ -1374,45 +1651,46 @@ class DataFactory(object):
         else:
             rating_keys = [rating_key]
 
-        rating_keys_arg = ','.join(['?'] * len(rating_keys))
+        rating_keys = [helpers.cast_to_int(key) for key in rating_keys if str(key).isdigit()]
+        rating_filter = None
+        if rating_keys:
+            rating_filter = or_(
+                SessionHistory.grandparent_rating_key.in_(rating_keys),
+                SessionHistory.parent_rating_key.in_(rating_keys),
+                SessionHistory.rating_key.in_(rating_keys),
+            )
 
         try:
-            if str(rating_key).isdigit():
-                query = "SELECT (CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' " \
-                        "THEN users.username ELSE users.friendly_name END) AS friendly_name, " \
-                        "users.user_id, users.username, users.thumb, users.custom_avatar_url AS custom_thumb, " \
-                        "COUNT(DISTINCT %s) AS total_plays, (SUM(stopped - started) - " \
-                        "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                        "MAX(session_history.section_id) AS section_id " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                        "JOIN users ON users.user_id = session_history.user_id " \
-                        "WHERE (session_history.grandparent_rating_key IN (%s) " \
-                        "OR session_history.parent_rating_key IN (%s) " \
-                        "OR session_history.rating_key IN (%s)) " \
-                        "GROUP BY users.user_id, users.username, users.friendly_name, users.thumb, " \
-                        "users.custom_avatar_url " \
-                        "ORDER BY total_plays DESC, total_time DESC" % (
-                            group_by, rating_keys_arg, rating_keys_arg, rating_keys_arg
-                        )
+            stmt = (
+                select(
+                    friendly_name_expr.label('friendly_name'),
+                    User.user_id,
+                    User.username,
+                    User.thumb,
+                    User.custom_avatar_url.label('custom_thumb'),
+                    total_plays_expr,
+                    total_time_expr,
+                    func.max(SessionHistory.section_id).label('section_id'),
+                )
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .join(User, User.user_id == SessionHistory.user_id)
+            )
 
-                result = monitor_db.select(query, args=rating_keys * 3)
+            if rating_filter is not None:
+                stmt = stmt.where(rating_filter)
             elif guid:
-                query = "SELECT (CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' " \
-                        "THEN users.username ELSE users.friendly_name END) AS friendly_name, " \
-                        "users.user_id, users.username, users.thumb, users.custom_avatar_url AS custom_thumb, " \
-                        "COUNT(DISTINCT %s) AS total_plays, (SUM(stopped - started) - " \
-                        "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                        "MAX(session_history.section_id) AS section_id " \
-                        "FROM session_history " \
-                        "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                        "JOIN users ON users.user_id = session_history.user_id " \
-                        "WHERE session_history_metadata.guid = ? " \
-                        "GROUP BY users.user_id, users.username, users.friendly_name, users.thumb, " \
-                        "users.custom_avatar_url " \
-                        "ORDER BY total_plays DESC, total_time DESC" % group_by
+                stmt = stmt.where(SessionHistoryMetadata.guid == guid)
+            else:
+                stmt = None
 
-                result = monitor_db.select(query, args=[guid])
+            if stmt is not None:
+                stmt = (
+                    stmt.group_by(User.user_id, User.username, User.friendly_name, User.thumb, User.custom_avatar_url)
+                    .order_by(total_plays_expr.desc(), total_time_expr.desc())
+                )
+                with session_scope() as db_session:
+                    result = queries.fetch_mappings(db_session, stmt)
             else:
                 result = []
         except Exception as e:
@@ -1444,59 +1722,159 @@ class DataFactory(object):
         return session.mask_session_info(user_stats, mask_metadata=False)
 
     def get_stream_details(self, row_id=None, session_key=None):
-        monitor_db = database.MonitorDatabase()
-
-        user_cond = ''
-        table = 'session_history' if row_id else 'sessions'
-        if session.get_session_user_id():
-            user_cond = "AND %s.user_id = %s " % (table, session.get_session_user_id())
+        session_user_id = session.get_session_user_id()
+        user_id_filter = helpers.cast_to_int(session_user_id) if session_user_id else None
 
         if row_id:
-            query = "SELECT bitrate, video_full_resolution, " \
-                    "optimized_version, optimized_version_profile, optimized_version_title, " \
-                    "synced_version, synced_version_profile, " \
-                    "container, video_codec, video_bitrate, video_width, video_height, video_framerate, " \
-                    "video_dynamic_range, aspect_ratio, " \
-                    "audio_codec, audio_bitrate, audio_channels, audio_language, audio_language_code, " \
-                    "subtitle_codec, subtitle_forced, subtitle_language, " \
-                    "stream_bitrate, stream_video_full_resolution, quality_profile, stream_container_decision, stream_container, " \
-                    "stream_video_decision, stream_video_codec, stream_video_bitrate, stream_video_width, stream_video_height, " \
-                    "stream_video_framerate, stream_video_dynamic_range, " \
-                    "stream_audio_decision, stream_audio_codec, stream_audio_bitrate, stream_audio_channels, " \
-                    "stream_audio_language, stream_audio_language_code, " \
-                    "subtitles, stream_subtitle_decision, stream_subtitle_codec, stream_subtitle_forced, stream_subtitle_language, " \
-                    "transcode_hw_decoding, transcode_hw_encoding, " \
-                    "video_decision, audio_decision, transcode_decision, width, height, container, " \
-                    "transcode_container, transcode_video_codec, transcode_audio_codec, transcode_audio_channels, " \
-                    "transcode_width, transcode_height, " \
-                    "session_history_metadata.media_type, title, grandparent_title, original_title " \
-                    "FROM session_history_media_info " \
-                    "JOIN session_history ON session_history_media_info.id = session_history.id " \
-                    "JOIN session_history_metadata ON session_history_media_info.id = session_history_metadata.id " \
-                    "WHERE session_history_media_info.id = ? %s" % user_cond
-            result = monitor_db.select(query, args=[row_id])
+            stmt = (
+                select(
+                    SessionHistoryMediaInfo.bitrate,
+                    SessionHistoryMediaInfo.video_full_resolution,
+                    SessionHistoryMediaInfo.optimized_version,
+                    SessionHistoryMediaInfo.optimized_version_profile,
+                    SessionHistoryMediaInfo.optimized_version_title,
+                    SessionHistoryMediaInfo.synced_version,
+                    SessionHistoryMediaInfo.synced_version_profile,
+                    SessionHistoryMediaInfo.container,
+                    SessionHistoryMediaInfo.video_codec,
+                    SessionHistoryMediaInfo.video_bitrate,
+                    SessionHistoryMediaInfo.video_width,
+                    SessionHistoryMediaInfo.video_height,
+                    SessionHistoryMediaInfo.video_framerate,
+                    SessionHistoryMediaInfo.video_dynamic_range,
+                    SessionHistoryMediaInfo.aspect_ratio,
+                    SessionHistoryMediaInfo.audio_codec,
+                    SessionHistoryMediaInfo.audio_bitrate,
+                    SessionHistoryMediaInfo.audio_channels,
+                    SessionHistoryMediaInfo.audio_language,
+                    SessionHistoryMediaInfo.audio_language_code,
+                    SessionHistoryMediaInfo.subtitle_codec,
+                    SessionHistoryMediaInfo.subtitle_forced,
+                    SessionHistoryMediaInfo.subtitle_language,
+                    SessionHistoryMediaInfo.stream_bitrate,
+                    SessionHistoryMediaInfo.stream_video_full_resolution,
+                    SessionHistoryMediaInfo.quality_profile,
+                    SessionHistoryMediaInfo.stream_container_decision,
+                    SessionHistoryMediaInfo.stream_container,
+                    SessionHistoryMediaInfo.stream_video_decision,
+                    SessionHistoryMediaInfo.stream_video_codec,
+                    SessionHistoryMediaInfo.stream_video_bitrate,
+                    SessionHistoryMediaInfo.stream_video_width,
+                    SessionHistoryMediaInfo.stream_video_height,
+                    SessionHistoryMediaInfo.stream_video_framerate,
+                    SessionHistoryMediaInfo.stream_video_dynamic_range,
+                    SessionHistoryMediaInfo.stream_audio_decision,
+                    SessionHistoryMediaInfo.stream_audio_codec,
+                    SessionHistoryMediaInfo.stream_audio_bitrate,
+                    SessionHistoryMediaInfo.stream_audio_channels,
+                    SessionHistoryMediaInfo.stream_audio_language,
+                    SessionHistoryMediaInfo.stream_audio_language_code,
+                    SessionHistoryMediaInfo.subtitles,
+                    SessionHistoryMediaInfo.stream_subtitle_decision,
+                    SessionHistoryMediaInfo.stream_subtitle_codec,
+                    SessionHistoryMediaInfo.stream_subtitle_forced,
+                    SessionHistoryMediaInfo.stream_subtitle_language,
+                    SessionHistoryMediaInfo.transcode_hw_decoding,
+                    SessionHistoryMediaInfo.transcode_hw_encoding,
+                    SessionHistoryMediaInfo.video_decision,
+                    SessionHistoryMediaInfo.audio_decision,
+                    SessionHistoryMediaInfo.transcode_decision,
+                    SessionHistoryMediaInfo.width,
+                    SessionHistoryMediaInfo.height,
+                    SessionHistoryMediaInfo.transcode_container,
+                    SessionHistoryMediaInfo.transcode_video_codec,
+                    SessionHistoryMediaInfo.transcode_audio_codec,
+                    SessionHistoryMediaInfo.transcode_audio_channels,
+                    SessionHistoryMediaInfo.transcode_width,
+                    SessionHistoryMediaInfo.transcode_height,
+                    SessionHistoryMetadata.media_type,
+                    SessionHistoryMetadata.title,
+                    SessionHistoryMetadata.grandparent_title,
+                    SessionHistoryMetadata.original_title,
+                )
+                .select_from(SessionHistoryMediaInfo)
+                .join(SessionHistory, SessionHistoryMediaInfo.id == SessionHistory.id)
+                .join(SessionHistoryMetadata, SessionHistoryMediaInfo.id == SessionHistoryMetadata.id)
+                .where(SessionHistoryMediaInfo.id == row_id)
+            )
+            if user_id_filter is not None:
+                stmt = stmt.where(SessionHistory.user_id == user_id_filter)
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         elif session_key:
-            query = "SELECT bitrate, video_full_resolution, " \
-                    "optimized_version, optimized_version_profile, optimized_version_title, " \
-                    "synced_version, synced_version_profile, " \
-                    "container, video_codec, video_bitrate, video_width, video_height, video_framerate, " \
-                    "video_dynamic_range, aspect_ratio, " \
-                    "audio_codec, audio_bitrate, audio_channels, audio_language, audio_language_code, " \
-                    "subtitle_codec, subtitle_forced, subtitle_language, " \
-                    "stream_bitrate, stream_video_full_resolution, quality_profile, stream_container_decision, stream_container, " \
-                    "stream_video_decision, stream_video_codec, stream_video_bitrate, stream_video_width, stream_video_height, " \
-                    "stream_video_framerate, stream_video_dynamic_range, " \
-                    "stream_audio_decision, stream_audio_codec, stream_audio_bitrate, stream_audio_channels, " \
-                    "stream_audio_language, stream_audio_language_code, " \
-                    "subtitles, stream_subtitle_decision, stream_subtitle_codec, stream_subtitle_forced, stream_subtitle_language, " \
-                    "transcode_hw_decoding, transcode_hw_encoding, " \
-                    "video_decision, audio_decision, transcode_decision, width, height, container, " \
-                    "transcode_container, transcode_video_codec, transcode_audio_codec, transcode_audio_channels, " \
-                    "transcode_width, transcode_height, " \
-                    "media_type, title, grandparent_title, original_title " \
-                    "FROM sessions " \
-                    "WHERE session_key = ? %s" % user_cond
-            result = monitor_db.select(query, args=[session_key])
+            stmt = (
+                select(
+                    Session.bitrate,
+                    Session.video_full_resolution,
+                    Session.optimized_version,
+                    Session.optimized_version_profile,
+                    Session.optimized_version_title,
+                    Session.synced_version,
+                    Session.synced_version_profile,
+                    Session.container,
+                    Session.video_codec,
+                    Session.video_bitrate,
+                    Session.video_width,
+                    Session.video_height,
+                    Session.video_framerate,
+                    Session.video_dynamic_range,
+                    Session.aspect_ratio,
+                    Session.audio_codec,
+                    Session.audio_bitrate,
+                    Session.audio_channels,
+                    Session.audio_language,
+                    Session.audio_language_code,
+                    Session.subtitle_codec,
+                    Session.subtitle_forced,
+                    Session.subtitle_language,
+                    Session.stream_bitrate,
+                    Session.stream_video_full_resolution,
+                    Session.quality_profile,
+                    Session.stream_container_decision,
+                    Session.stream_container,
+                    Session.stream_video_decision,
+                    Session.stream_video_codec,
+                    Session.stream_video_bitrate,
+                    Session.stream_video_width,
+                    Session.stream_video_height,
+                    Session.stream_video_framerate,
+                    Session.stream_video_dynamic_range,
+                    Session.stream_audio_decision,
+                    Session.stream_audio_codec,
+                    Session.stream_audio_bitrate,
+                    Session.stream_audio_channels,
+                    Session.stream_audio_language,
+                    Session.stream_audio_language_code,
+                    Session.subtitles,
+                    Session.stream_subtitle_decision,
+                    Session.stream_subtitle_codec,
+                    Session.stream_subtitle_forced,
+                    Session.stream_subtitle_language,
+                    Session.transcode_hw_decoding,
+                    Session.transcode_hw_encoding,
+                    Session.video_decision,
+                    Session.audio_decision,
+                    Session.transcode_decision,
+                    Session.width,
+                    Session.height,
+                    Session.transcode_container,
+                    Session.transcode_video_codec,
+                    Session.transcode_audio_codec,
+                    Session.transcode_audio_channels,
+                    Session.transcode_width,
+                    Session.transcode_height,
+                    Session.media_type,
+                    Session.title,
+                    Session.grandparent_title,
+                    Session.original_title,
+                )
+                .select_from(Session)
+                .where(Session.session_key == session_key)
+            )
+            if user_id_filter is not None:
+                stmt = stmt.where(Session.user_id == user_id_filter)
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         else:
             return None
 
@@ -1582,49 +1960,80 @@ class DataFactory(object):
         return stream_output
 
     def get_metadata_details(self, rating_key='', guid=''):
-        monitor_db = database.MonitorDatabase()
-
         if rating_key or guid:
             if guid:
-                where = "session_history_metadata.guid LIKE ?"
-                args = [guid.split('?')[0] + '%']  # SQLite LIKE wildcard
+                guid_prefix = guid.split('?')[0] + '%'
+                where_cond = SessionHistoryMetadata.guid.like(guid_prefix)
             else:
-                where = "session_history_metadata.rating_key = ?"
-                args = [rating_key]
+                where_cond = SessionHistoryMetadata.rating_key == helpers.cast_to_int(rating_key)
 
-            query = "SELECT session_history.section_id, session_history_metadata.id, " \
-                    "session_history_metadata.rating_key, session_history_metadata.parent_rating_key, " \
-                    "session_history_metadata.grandparent_rating_key, session_history_metadata.title, " \
-                    "session_history_metadata.parent_title, session_history_metadata.grandparent_title, " \
-                    "session_history_metadata.original_title, session_history_metadata.full_title, " \
-                    "library_sections.section_name, " \
-                    "session_history_metadata.media_index, session_history_metadata.parent_media_index, " \
-                    "session_history_metadata.thumb, " \
-                    "session_history_metadata.parent_thumb, session_history_metadata.grandparent_thumb, " \
-                    "session_history_metadata.art, session_history_metadata.media_type, session_history_metadata.year, " \
-                    "session_history_metadata.originally_available_at, session_history_metadata.added_at, " \
-                    "session_history_metadata.updated_at, session_history_metadata.last_viewed_at, " \
-                    "session_history_metadata.content_rating, session_history_metadata.summary, " \
-                    "session_history_metadata.tagline, session_history_metadata.rating, session_history_metadata.duration, " \
-                    "session_history_metadata.guid, session_history_metadata.directors, session_history_metadata.writers, " \
-                    "session_history_metadata.actors, session_history_metadata.genres, session_history_metadata.studio, " \
-                    "session_history_metadata.labels, " \
-                    "session_history_media_info.container, session_history_media_info.bitrate, " \
-                    "session_history_media_info.video_codec, session_history_media_info.video_resolution, " \
-                    "session_history_media_info.video_full_resolution, " \
-                    "session_history_media_info.video_framerate, session_history_media_info.audio_codec, " \
-                    "session_history_media_info.audio_channels, session_history_metadata.live, " \
-                    "session_history_metadata.channel_call_sign, session_history_metadata.channel_id, " \
-                    "session_history_metadata.channel_identifier, session_history_metadata.channel_title, " \
-                    "session_history_metadata.channel_thumb, session_history_metadata.channel_vcn " \
-                    "FROM session_history_metadata " \
-                    "JOIN library_sections ON session_history.section_id = library_sections.section_id " \
-                    "JOIN session_history ON session_history_metadata.id = session_history.id " \
-                    "JOIN session_history_media_info ON session_history_metadata.id = session_history_media_info.id " \
-                    "WHERE %s " \
-                    "ORDER BY session_history_metadata.id DESC " \
-                    "LIMIT 1" % where
-            result = monitor_db.select(query=query, args=args)
+            stmt = (
+                select(
+                    SessionHistory.section_id.label('section_id'),
+                    SessionHistoryMetadata.id.label('id'),
+                    SessionHistoryMetadata.rating_key,
+                    SessionHistoryMetadata.parent_rating_key,
+                    SessionHistoryMetadata.grandparent_rating_key,
+                    SessionHistoryMetadata.title,
+                    SessionHistoryMetadata.parent_title,
+                    SessionHistoryMetadata.grandparent_title,
+                    SessionHistoryMetadata.original_title,
+                    SessionHistoryMetadata.full_title,
+                    LibrarySection.section_name,
+                    SessionHistoryMetadata.media_index,
+                    SessionHistoryMetadata.parent_media_index,
+                    SessionHistoryMetadata.thumb,
+                    SessionHistoryMetadata.parent_thumb,
+                    SessionHistoryMetadata.grandparent_thumb,
+                    SessionHistoryMetadata.art,
+                    SessionHistoryMetadata.media_type,
+                    SessionHistoryMetadata.year,
+                    SessionHistoryMetadata.originally_available_at,
+                    SessionHistoryMetadata.added_at,
+                    SessionHistoryMetadata.updated_at,
+                    SessionHistoryMetadata.last_viewed_at,
+                    SessionHistoryMetadata.content_rating,
+                    SessionHistoryMetadata.summary,
+                    SessionHistoryMetadata.tagline,
+                    SessionHistoryMetadata.rating,
+                    SessionHistoryMetadata.duration,
+                    SessionHistoryMetadata.guid,
+                    SessionHistoryMetadata.directors,
+                    SessionHistoryMetadata.writers,
+                    SessionHistoryMetadata.actors,
+                    SessionHistoryMetadata.genres,
+                    SessionHistoryMetadata.studio,
+                    SessionHistoryMetadata.labels,
+                    SessionHistoryMediaInfo.container,
+                    SessionHistoryMediaInfo.bitrate,
+                    SessionHistoryMediaInfo.video_codec,
+                    SessionHistoryMediaInfo.video_resolution,
+                    SessionHistoryMediaInfo.video_full_resolution,
+                    SessionHistoryMediaInfo.video_framerate,
+                    SessionHistoryMediaInfo.audio_codec,
+                    SessionHistoryMediaInfo.audio_channels,
+                    SessionHistoryMetadata.live,
+                    SessionHistoryMetadata.channel_call_sign,
+                    SessionHistoryMetadata.channel_id,
+                    SessionHistoryMetadata.channel_identifier,
+                    SessionHistoryMetadata.channel_title,
+                    SessionHistoryMetadata.channel_thumb,
+                    SessionHistoryMetadata.channel_vcn,
+                )
+                .select_from(SessionHistoryMetadata)
+                .join(SessionHistory, SessionHistoryMetadata.id == SessionHistory.id)
+                .join(LibrarySection, SessionHistory.section_id == LibrarySection.section_id)
+                .join(SessionHistoryMediaInfo, SessionHistoryMetadata.id == SessionHistoryMediaInfo.id)
+                .where(where_cond)
+                .order_by(SessionHistoryMetadata.id.desc())
+                .limit(1)
+            )
+            try:
+                with session_scope() as db_session:
+                    result = queries.fetch_mappings(db_session, stmt)
+            except Exception as e:
+                logger.warn("Tautulli DataFactory :: Unable to execute database query for get_metadata_details: %s." % e)
+                result = []
         else:
             result = []
 
@@ -1700,138 +2109,127 @@ class DataFactory(object):
             return []
 
     def get_total_duration(self, custom_where=None):
-        monitor_db = database.MonitorDatabase()
-
-        where, args = datatables.build_custom_where(custom_where=custom_where)
-
         try:
-            query = "SELECT SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE 0 END) - " \
-                    "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS total_duration " \
-                    "FROM session_history " \
-                    "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
-                    "JOIN session_history_media_info ON session_history_media_info.id = session_history.id " \
-                    "%s " % where
-            result = monitor_db.select(query, args=args)
+            total_duration = raw_pg.fetch_total_duration(custom_where=custom_where)
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_total_duration: %s." % e)
             return None
 
-        total_duration = 0
-        for item in result:
-            total_duration = item['total_duration']
-
         return total_duration
 
     def get_session_ip(self, session_key=''):
-        monitor_db = database.MonitorDatabase()
-
         ip_address = 'N/A'
-
-        user_cond = ''
-        if session.get_session_user_id():
-            user_cond = 'AND user_id = %s ' % session.get_session_user_id()
 
         if session_key:
             try:
-                query = "SELECT ip_address FROM sessions WHERE session_key = %d %s" % (int(session_key), user_cond)
-                result = monitor_db.select(query)
+                session_key_int = int(session_key)
+                stmt = select(Session.ip_address).where(Session.session_key == session_key_int)
+                session_user_id = session.get_session_user_id()
+                if session_user_id:
+                    stmt = stmt.where(Session.user_id == helpers.cast_to_int(session_user_id))
+                with session_scope() as db_session:
+                    ip_address = queries.fetch_scalar(db_session, stmt, default='N/A')
             except Exception as e:
                 logger.warn("Tautulli DataFactory :: Unable to execute database query for get_session_ip: %s." % e)
                 return ip_address
         else:
             return ip_address
 
-        for item in result:
-            ip_address = item['ip_address']
-
         return ip_address
 
     def get_img_info(self, img=None, rating_key=None, width=None, height=None,
                      opacity=None, background=None, blur=None, fallback=None,
                      order_by='', service=None):
-        monitor_db = database.MonitorDatabase()
-
         img_info = []
 
-        where_params = []
-        args = []
-
-        if img is not None:
-            where_params.append('img')
-            args.append(img)
-        if rating_key is not None:
-            where_params.append('rating_key')
-            args.append(rating_key)
-        if width is not None:
-            where_params.append('width')
-            args.append(width)
-        if height is not None:
-            where_params.append('height')
-            args.append(height)
-        if opacity is not None:
-            where_params.append('opacity')
-            args.append(opacity)
-        if background is not None:
-            where_params.append('background')
-            args.append(background)
-        if blur is not None:
-            where_params.append('blur')
-            args.append(blur)
-        if fallback is not None:
-            where_params.append('fallback')
-            args.append(fallback)
-
-        where = ''
-        if where_params:
-            where = "WHERE " + " AND ".join([w + " = ?" for w in where_params])
-
-        if order_by:
-            order_by = "ORDER BY " + order_by + " DESC"
-
         if service == 'imgur':
-            query = "SELECT imgur_title AS img_title, imgur_url AS img_url FROM imgur_lookup " \
-                    "JOIN image_hash_lookup ON imgur_lookup.img_hash = image_hash_lookup.img_hash " \
-                    "%s %s" % (where, order_by)
+            stmt = (
+                select(
+                    ImgurLookup.imgur_title.label('img_title'),
+                    ImgurLookup.imgur_url.label('img_url'),
+                )
+                .select_from(ImgurLookup)
+                .join(ImageHashLookup, ImgurLookup.img_hash == ImageHashLookup.img_hash)
+            )
         elif service == 'cloudinary':
-            query = "SELECT cloudinary_title AS img_title, cloudinary_url AS img_url FROM cloudinary_lookup " \
-                    "JOIN image_hash_lookup ON cloudinary_lookup.img_hash = image_hash_lookup.img_hash " \
-                    "%s %s" % (where, order_by)
+            stmt = (
+                select(
+                    CloudinaryLookup.cloudinary_title.label('img_title'),
+                    CloudinaryLookup.cloudinary_url.label('img_url'),
+                )
+                .select_from(CloudinaryLookup)
+                .join(ImageHashLookup, CloudinaryLookup.img_hash == ImageHashLookup.img_hash)
+            )
         else:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_img_info: "
                         "service not provided.")
             return img_info
 
+        if img is not None:
+            stmt = stmt.where(ImageHashLookup.img == img)
+        if rating_key is not None:
+            stmt = stmt.where(ImageHashLookup.rating_key == rating_key)
+        if width is not None:
+            stmt = stmt.where(ImageHashLookup.width == width)
+        if height is not None:
+            stmt = stmt.where(ImageHashLookup.height == height)
+        if opacity is not None:
+            stmt = stmt.where(ImageHashLookup.opacity == opacity)
+        if background is not None:
+            stmt = stmt.where(ImageHashLookup.background == background)
+        if blur is not None:
+            stmt = stmt.where(ImageHashLookup.blur == blur)
+        if fallback is not None:
+            stmt = stmt.where(ImageHashLookup.fallback == fallback)
+
+        if order_by:
+            order_column = getattr(ImageHashLookup, order_by, None)
+            if order_column is None and service == 'imgur':
+                order_column = getattr(ImgurLookup, order_by, None)
+            if order_column is None and service == 'cloudinary':
+                order_column = getattr(CloudinaryLookup, order_by, None)
+            if order_column is not None:
+                stmt = stmt.order_by(order_column.desc())
+
         try:
-            img_info = monitor_db.select(query, args=args)
+            with session_scope() as db_session:
+                img_info = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_img_info: %s." % e)
 
         return img_info
 
     def set_img_info(self, img_hash=None, img_title=None, img_url=None, delete_hash=None, service=None):
-        monitor_db = database.MonitorDatabase()
-
-        keys = {'img_hash': img_hash}
-
         if service == 'imgur':
-            table = 'imgur_lookup'
             values = {'imgur_title': img_title,
                       'imgur_url': img_url,
                       'delete_hash': delete_hash}
+            model = ImgurLookup
         elif service == 'cloudinary':
-            table = 'cloudinary_lookup'
             values = {'cloudinary_title': img_title,
                       'cloudinary_url': img_url}
+            model = CloudinaryLookup
         else:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for set_img_info: "
                         "service not provided.")
             return
 
-        monitor_db.upsert(table, key_dict=keys, value_dict=values)
+        keys = {'img_hash': img_hash}
+        values = values or {}
+        cleaned_keys = {key: value for key, value in keys.items() if value is not None}
+        insert_values = {**values, **cleaned_keys}
+        if not insert_values:
+            return
+
+        with session_scope() as db_session:
+            if cleaned_keys:
+                conditions = [getattr(model, key) == value for key, value in cleaned_keys.items()]
+                result = db_session.execute(update(model).where(*conditions).values(**values))
+                if result.rowcount and result.rowcount > 0:
+                    return
+            db_session.execute(insert(model).values(**insert_values))
 
     def delete_img_info(self, rating_key=None, service='', delete_all=False):
-        monitor_db = database.MonitorDatabase()
-
         if not delete_all:
             service = helpers.get_img_service()
 
@@ -1839,19 +2237,27 @@ class DataFactory(object):
             logger.error("Tautulli DataFactory :: Unable to delete hosted images: rating_key not provided.")
             return False
 
-        where = ''
-        args = []
+        filters = []
         log_msg = ''
         if rating_key:
-            where = "WHERE rating_key = ?"
-            args = [rating_key]
+            filters.append(ImageHashLookup.rating_key == rating_key)
             log_msg = ' for rating_key %s' % rating_key
 
         if service.lower() == 'imgur':
             # Delete from Imgur
-            query = "SELECT imgur_title, delete_hash, fallback FROM imgur_lookup " \
-                    "JOIN image_hash_lookup ON imgur_lookup.img_hash = image_hash_lookup.img_hash %s" % where
-            results = monitor_db.select(query, args=args)
+            stmt = (
+                select(
+                    ImgurLookup.imgur_title,
+                    ImgurLookup.delete_hash,
+                    ImageHashLookup.fallback,
+                )
+                .select_from(ImgurLookup)
+                .join(ImageHashLookup, ImgurLookup.img_hash == ImageHashLookup.img_hash)
+            )
+            if filters:
+                stmt = stmt.where(*filters)
+            with session_scope() as db_session:
+                results = queries.fetch_mappings(db_session, stmt)
 
             for imgur_info in results:
                 if imgur_info['delete_hash']:
@@ -1861,16 +2267,32 @@ class DataFactory(object):
 
             logger.info("Tautulli DataFactory :: Deleting Imgur info%s from the database."
                         % log_msg)
-            result = monitor_db.action("DELETE FROM imgur_lookup WHERE img_hash "
-                                       "IN (SELECT img_hash FROM image_hash_lookup %s)" % where,
-                                       args)
+            delete_stmt = delete(ImgurLookup).where(
+                ImgurLookup.img_hash.in_(
+                    select(ImageHashLookup.img_hash).where(*filters)
+                    if filters
+                    else select(ImageHashLookup.img_hash)
+                )
+            )
+            with session_scope() as db_session:
+                db_session.execute(delete_stmt)
 
         elif service.lower() == 'cloudinary':
             # Delete from Cloudinary
-            query = "SELECT cloudinary_title, rating_key, fallback FROM cloudinary_lookup " \
-                    "JOIN image_hash_lookup ON cloudinary_lookup.img_hash = image_hash_lookup.img_hash %s " \
-                    "GROUP BY rating_key" % where
-            results = monitor_db.select(query, args=args)
+            stmt = (
+                select(
+                    func.max(CloudinaryLookup.cloudinary_title).label('cloudinary_title'),
+                    ImageHashLookup.rating_key,
+                    func.max(ImageHashLookup.fallback).label('fallback'),
+                )
+                .select_from(CloudinaryLookup)
+                .join(ImageHashLookup, CloudinaryLookup.img_hash == ImageHashLookup.img_hash)
+                .group_by(ImageHashLookup.rating_key)
+            )
+            if filters:
+                stmt = stmt.where(*filters)
+            with session_scope() as db_session:
+                results = queries.fetch_mappings(db_session, stmt)
 
             if delete_all:
                 helpers.delete_from_cloudinary(delete_all=delete_all)
@@ -1880,9 +2302,15 @@ class DataFactory(object):
 
             logger.info("Tautulli DataFactory :: Deleting Cloudinary info%s from the database."
                         % log_msg)
-            result = monitor_db.action("DELETE FROM cloudinary_lookup WHERE img_hash "
-                                       "IN (SELECT img_hash FROM image_hash_lookup %s)" % where,
-                                       args)
+            delete_stmt = delete(CloudinaryLookup).where(
+                CloudinaryLookup.img_hash.in_(
+                    select(ImageHashLookup.img_hash).where(*filters)
+                    if filters
+                    else select(ImageHashLookup.img_hash)
+                )
+            )
+            with session_scope() as db_session:
+                db_session.execute(delete_stmt)
 
         else:
             logger.error("Tautulli DataFactory :: Unable to delete hosted images: invalid service '%s' provided."
@@ -1920,8 +2348,6 @@ class DataFactory(object):
         return poster_info
 
     def get_lookup_info(self, rating_key='', metadata=None):
-        monitor_db = database.MonitorDatabase()
-
         lookup_key = ''
         if str(rating_key).isdigit():
             lookup_key = rating_key
@@ -1939,24 +2365,31 @@ class DataFactory(object):
 
         if lookup_key:
             try:
-                query = 'SELECT tvmaze_id FROM tvmaze_lookup ' \
-                        'WHERE rating_key = ?'
-                tvmaze_info = monitor_db.select_single(query, args=[lookup_key])
-                if tvmaze_info:
-                    lookup_info['tvmaze_id'] = tvmaze_info['tvmaze_id']
+                lookup_key_int = helpers.cast_to_int(lookup_key)
+                with session_scope() as db_session:
+                    tvmaze_id = queries.fetch_scalar(
+                        db_session,
+                        select(TvmazeLookup.tvmaze_id).where(TvmazeLookup.rating_key == lookup_key_int),
+                        default=None,
+                    )
+                    if tvmaze_id:
+                        lookup_info['tvmaze_id'] = tvmaze_id
 
-                query = 'SELECT themoviedb_id FROM themoviedb_lookup ' \
-                        'WHERE rating_key = ?'
-                themoviedb_info = monitor_db.select_single(query, args=[lookup_key])
-                if themoviedb_info:
-                    lookup_info['themoviedb_id'] = themoviedb_info['themoviedb_id']
+                    themoviedb_id = queries.fetch_scalar(
+                        db_session,
+                        select(TheMovieDbLookup.themoviedb_id).where(TheMovieDbLookup.rating_key == lookup_key_int),
+                        default=None,
+                    )
+                    if themoviedb_id:
+                        lookup_info['themoviedb_id'] = themoviedb_id
 
-                query = 'SELECT musicbrainz_id FROM musicbrainz_lookup ' \
-                        'WHERE rating_key = ?'
-                musicbrainz_info = monitor_db.select_single(query, args=[lookup_key])
-                if musicbrainz_info:
-                    lookup_info['musicbrainz_id'] = musicbrainz_info['musicbrainz_id']
-
+                    musicbrainz_id = queries.fetch_scalar(
+                        db_session,
+                        select(MusicbrainzLookup.musicbrainz_id).where(MusicbrainzLookup.rating_key == lookup_key_int),
+                        default=None,
+                    )
+                    if musicbrainz_id:
+                        lookup_info['musicbrainz_id'] = musicbrainz_id
             except Exception as e:
                 logger.warn("Tautulli DataFactory :: Unable to execute database query for get_lookup_info: %s." % e)
 
@@ -1967,70 +2400,101 @@ class DataFactory(object):
             logger.error("Tautulli DataFactory :: Unable to delete lookup info: rating_key not provided.")
             return False
 
-        monitor_db = database.MonitorDatabase()
-
         if rating_key:
             logger.info("Tautulli DataFactory :: Deleting lookup info for rating_key %s from the database."
                         % rating_key)
-            result_themoviedb = monitor_db.action("DELETE FROM themoviedb_lookup WHERE rating_key = ?", [rating_key])
-            result_tvmaze = monitor_db.action("DELETE FROM tvmaze_lookup WHERE rating_key = ?", [rating_key])
-            result_musicbrainz = monitor_db.action("DELETE FROM musicbrainz_lookup WHERE rating_key = ?", [rating_key])
+            rating_key_int = helpers.cast_to_int(rating_key)
+            with session_scope() as db_session:
+                result_themoviedb = db_session.execute(
+                    delete(TheMovieDbLookup).where(TheMovieDbLookup.rating_key == rating_key_int)
+                ).rowcount
+                result_tvmaze = db_session.execute(
+                    delete(TvmazeLookup).where(TvmazeLookup.rating_key == rating_key_int)
+                ).rowcount
+                result_musicbrainz = db_session.execute(
+                    delete(MusicbrainzLookup).where(MusicbrainzLookup.rating_key == rating_key_int)
+                ).rowcount
             return bool(result_themoviedb or result_tvmaze or result_musicbrainz)
         elif service and delete_all:
             if service.lower() in ('themoviedb', 'tvmaze', 'musicbrainz'):
                 logger.info("Tautulli DataFactory :: Deleting all lookup info for '%s' from the database."
                             % service)
-                result = monitor_db.action("DELETE FROM %s_lookup" % service.lower())
+                with session_scope() as db_session:
+                    if service.lower() == 'themoviedb':
+                        result = db_session.execute(delete(TheMovieDbLookup)).rowcount
+                    elif service.lower() == 'tvmaze':
+                        result = db_session.execute(delete(TvmazeLookup)).rowcount
+                    else:
+                        result = db_session.execute(delete(MusicbrainzLookup)).rowcount
                 return bool(result)
             else:
                 logger.error("Tautulli DataFactory :: Unable to delete lookup info: invalid service '%s' provided."
                              % service)
 
     def get_search_query(self, rating_key=''):
-        monitor_db = database.MonitorDatabase()
-
         if rating_key:
-            query = "SELECT rating_key, parent_rating_key, grandparent_rating_key, title, parent_title, grandparent_title, " \
-                    "media_index, parent_media_index, year, media_type " \
-                    "FROM session_history_metadata " \
-                    "WHERE rating_key = ? " \
-                    "OR parent_rating_key = ? " \
-                    "OR grandparent_rating_key = ? " \
-                    "LIMIT 1"
-            result = monitor_db.select(query=query, args=[rating_key, rating_key, rating_key])
+            rating_key_int = helpers.cast_to_int(rating_key)
+            stmt = (
+                select(
+                    SessionHistoryMetadata.rating_key,
+                    SessionHistoryMetadata.parent_rating_key,
+                    SessionHistoryMetadata.grandparent_rating_key,
+                    SessionHistoryMetadata.title,
+                    SessionHistoryMetadata.parent_title,
+                    SessionHistoryMetadata.grandparent_title,
+                    SessionHistoryMetadata.media_index,
+                    SessionHistoryMetadata.parent_media_index,
+                    SessionHistoryMetadata.year,
+                    SessionHistoryMetadata.media_type,
+                )
+                .where(
+                    or_(
+                        SessionHistoryMetadata.rating_key == rating_key_int,
+                        SessionHistoryMetadata.parent_rating_key == rating_key_int,
+                        SessionHistoryMetadata.grandparent_rating_key == rating_key_int,
+                    )
+                )
+                .limit(1)
+            )
+            try:
+                with session_scope() as db_session:
+                    result = queries.fetch_mapping(db_session, stmt, default={})
+            except Exception as e:
+                logger.warn("Tautulli DataFactory :: Unable to execute database query for get_search_query: %s." % e)
+                result = {}
         else:
-            result = []
+            result = {}
 
         query = {}
         query_string = None
         media_type = None
 
-        for item in result:
-            title = item['title']
-            parent_title = item['parent_title']
-            grandparent_title = item['grandparent_title']
-            media_index = item['media_index']
-            parent_media_index = item['parent_media_index']
-            year = item['year']
+        if result:
+            title = result['title']
+            parent_title = result['parent_title']
+            grandparent_title = result['grandparent_title']
+            media_index = result['media_index']
+            parent_media_index = result['parent_media_index']
+            year = result['year']
 
-            if str(item['rating_key']) == rating_key:
-                query_string = item['title']
-                media_type = item['media_type']
+            if str(result['rating_key']) == rating_key:
+                query_string = result['title']
+                media_type = result['media_type']
 
-            elif str(item['parent_rating_key']) == rating_key:
-                if item['media_type'] == 'episode':
-                    query_string = item['grandparent_title']
+            elif str(result['parent_rating_key']) == rating_key:
+                if result['media_type'] == 'episode':
+                    query_string = result['grandparent_title']
                     media_type = 'season'
-                elif item['media_type'] == 'track':
-                    query_string = item['parent_title']
+                elif result['media_type'] == 'track':
+                    query_string = result['parent_title']
                     media_type = 'album'
 
-            elif str(item['grandparent_rating_key']) == rating_key:
-                if item['media_type'] == 'episode':
-                    query_string = item['grandparent_title']
+            elif str(result['grandparent_rating_key']) == rating_key:
+                if result['media_type'] == 'episode':
+                    query_string = result['grandparent_title']
                     media_type = 'show'
-                elif item['media_type'] == 'track':
-                    query_string = item['grandparent_title']
+                elif result['media_type'] == 'track':
+                    query_string = result['grandparent_title']
                     media_type = 'artist'
 
         if query_string and media_type:
@@ -2050,8 +2514,6 @@ class DataFactory(object):
         return query
 
     def get_rating_keys_list(self, rating_key='', media_type=''):
-        monitor_db = database.MonitorDatabase()
-
         if media_type == 'movie':
             key_list = {0: {'rating_key': int(rating_key)}}
             return key_list
@@ -2063,64 +2525,92 @@ class DataFactory(object):
 
         # Get the grandparent rating key
         try:
-            query = "SELECT rating_key, parent_rating_key, grandparent_rating_key " \
-                    "FROM session_history_metadata " \
-                    "WHERE rating_key = ? " \
-                    "OR parent_rating_key = ? " \
-                    "OR grandparent_rating_key = ? " \
-                    "LIMIT 1"
-            result = monitor_db.select(query=query, args=[rating_key, rating_key, rating_key])
+            rating_key_int = helpers.cast_to_int(rating_key)
+            with session_scope() as db_session:
+                stmt = (
+                    select(SessionHistoryMetadata.grandparent_rating_key)
+                    .where(
+                        or_(
+                            SessionHistoryMetadata.rating_key == rating_key_int,
+                            SessionHistoryMetadata.parent_rating_key == rating_key_int,
+                            SessionHistoryMetadata.grandparent_rating_key == rating_key_int,
+                        )
+                    )
+                    .limit(1)
+                )
+                result = queries.fetch_mapping(db_session, stmt, default={})
+                if not result:
+                    return {}
 
-            grandparent_rating_key = result[0]['grandparent_rating_key']
+                grandparent_rating_key = result['grandparent_rating_key']
+                if grandparent_rating_key is None:
+                    return {}
 
+                def fetch_grouped(filter_column, filter_value, group_column):
+                    if filter_value is None:
+                        return []
+                    grouped_stmt = (
+                        select(
+                            func.max(SessionHistoryMetadata.rating_key).label('rating_key'),
+                            func.max(SessionHistoryMetadata.parent_rating_key).label('parent_rating_key'),
+                            func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
+                            func.max(SessionHistoryMetadata.title).label('title'),
+                            func.max(SessionHistoryMetadata.parent_title).label('parent_title'),
+                            func.max(SessionHistoryMetadata.grandparent_title).label('grandparent_title'),
+                            func.max(SessionHistoryMetadata.media_index).label('media_index'),
+                            func.max(SessionHistoryMetadata.parent_media_index).label('parent_media_index'),
+                        )
+                        .where(filter_column == filter_value)
+                        .group_by(group_column)
+                        .order_by(group_column.desc())
+                    )
+                    return queries.fetch_mappings(db_session, grouped_stmt)
+
+                grandparents = {}
+                grandparent_rows = fetch_grouped(
+                    SessionHistoryMetadata.grandparent_rating_key,
+                    grandparent_rating_key,
+                    SessionHistoryMetadata.grandparent_rating_key,
+                )
+                for grandparent_row in grandparent_rows:
+                    parents = {}
+                    parent_rows = fetch_grouped(
+                        SessionHistoryMetadata.grandparent_rating_key,
+                        grandparent_row['grandparent_rating_key'],
+                        SessionHistoryMetadata.parent_rating_key,
+                    )
+                    for parent_row in parent_rows:
+                        children = {}
+                        child_rows = fetch_grouped(
+                            SessionHistoryMetadata.parent_rating_key,
+                            parent_row['parent_rating_key'],
+                            SessionHistoryMetadata.rating_key,
+                        )
+                        for child_row in child_rows:
+                            key = child_row['media_index'] if child_row['media_index'] else str(child_row['title']).lower()
+                            children.update({key: {'rating_key': child_row['rating_key']}})
+
+                        key = parent_row['parent_media_index'] if match_type == 'index' else str(parent_row['parent_title']).lower()
+                        parents.update({key:
+                                        {'rating_key': parent_row['parent_rating_key'],
+                                         'children': children}
+                                        })
+
+                    key = 0 if match_type == 'index' else str(grandparent_row['grandparent_title']).lower()
+                    grandparents.update({key:
+                                         {'rating_key': grandparent_row['grandparent_rating_key'],
+                                          'children': parents}
+                                         })
+
+                key_list = grandparents
+
+                return key_list
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_rating_keys_list: %s." % e)
             return {}
 
-        query = "SELECT rating_key, parent_rating_key, grandparent_rating_key, title, parent_title, grandparent_title, " \
-                "media_index, parent_media_index " \
-                "FROM session_history_metadata " \
-                "WHERE {0} = ? " \
-                "GROUP BY {1} " \
-                "ORDER BY {1} DESC "
-
-        # get grandparent_rating_keys
-        grandparents = {}
-        result = monitor_db.select(query=query.format('grandparent_rating_key', 'grandparent_rating_key'),
-                                   args=[grandparent_rating_key])
-        for item in result:
-            # get parent_rating_keys
-            parents = {}
-            result = monitor_db.select(query=query.format('grandparent_rating_key', 'parent_rating_key'),
-                                       args=[item['grandparent_rating_key']])
-            for item in result:
-                # get rating_keys
-                children = {}
-                result = monitor_db.select(query=query.format('parent_rating_key', 'rating_key'),
-                                           args=[item['parent_rating_key']])
-                for item in result:
-                    key = item['media_index'] if item['media_index'] else str(item['title']).lower()
-                    children.update({key: {'rating_key': item['rating_key']}})
-
-                key = item['parent_media_index'] if match_type == 'index' else str(item['parent_title']).lower()
-                parents.update({key:
-                                {'rating_key': item['parent_rating_key'],
-                                 'children': children}
-                                })
-
-            key = 0 if match_type == 'index' else str(item['grandparent_title']).lower()
-            grandparents.update({key:
-                                 {'rating_key': item['grandparent_rating_key'],
-                                  'children': parents}
-                                 })
-
-        key_list = grandparents
-
-        return key_list
-
     def update_metadata(self, old_key_list='', new_key_list='', media_type='', single_update=False):
         pms_connect = pmsconnect.PmsConnect()
-        monitor_db = database.MonitorDatabase()
 
         # function to map rating keys pairs
         def get_pairs(old, new):
@@ -2149,6 +2639,16 @@ class DataFactory(object):
                     'rating_key_ids': set()
                 }
 
+            def _fetch_ids(column, old_value, id_cache):
+                stmt = select(SessionHistory.id).where(column == old_value)
+                if id_cache:
+                    stmt = stmt.where(SessionHistory.id.notin_(id_cache))
+                with session_scope() as db_session:
+                    ids = db_session.execute(stmt).scalars().all()
+                if ids:
+                    id_cache.update(ids)
+                return ids
+
             for old_key, new_key in mapping.items():
                 metadata = pms_connect.get_metadata_details(new_key)
 
@@ -2158,87 +2658,69 @@ class DataFactory(object):
 
                     if metadata['media_type'] == 'show' or metadata['media_type'] == 'artist':
                         # check grandparent_rating_key (2 tables)
-                        query = (
-                            "SELECT id FROM session_history "
-                            "WHERE grandparent_rating_key = ? "
+                        ids = _fetch_ids(
+                            SessionHistory.grandparent_rating_key,
+                            old_key,
+                            _UPDATE_METADATA_IDS['grandparent_rating_key_ids'],
                         )
-                        args = [old_key]
-
-                        if _UPDATE_METADATA_IDS['grandparent_rating_key_ids']:
-                            query += "AND id NOT IN (%s)" % ",".join(_UPDATE_METADATA_IDS['grandparent_rating_key_ids'])
-
-                        ids = [str(row['id']) for row in monitor_db.select(query, args)]
-                        if ids:
-                            _UPDATE_METADATA_IDS['grandparent_rating_key_ids'].update(ids)
-                        else:
+                        if not ids:
                             continue
 
-                        monitor_db.action(
-                            "UPDATE session_history SET grandparent_rating_key = ? "
-                            "WHERE id IN (%s)" % ",".join(ids),
-                            [new_key]
-                        )
-                        monitor_db.action(
-                            "UPDATE session_history_metadata SET grandparent_rating_key = ? "
-                            "WHERE id IN (%s)" % ",".join(ids),
-                            [new_key]
-                        )
+                        with session_scope() as db_session:
+                            db_session.execute(
+                                update(SessionHistory)
+                                .where(SessionHistory.id.in_(ids))
+                                .values(grandparent_rating_key=new_key)
+                            )
+                            db_session.execute(
+                                update(SessionHistoryMetadata)
+                                .where(SessionHistoryMetadata.id.in_(ids))
+                                .values(grandparent_rating_key=new_key)
+                            )
 
                     elif metadata['media_type'] == 'season' or metadata['media_type'] == 'album':
                         # check parent_rating_key (2 tables)
-                        query = (
-                            "SELECT id FROM session_history "
-                            "WHERE parent_rating_key = ? "
+                        ids = _fetch_ids(
+                            SessionHistory.parent_rating_key,
+                            old_key,
+                            _UPDATE_METADATA_IDS['parent_rating_key_ids'],
                         )
-                        args = [old_key]
-
-                        if _UPDATE_METADATA_IDS['parent_rating_key_ids']:
-                            query += "AND id NOT IN (%s)" % ",".join(_UPDATE_METADATA_IDS['parent_rating_key_ids'])
-
-                        ids = [str(row['id']) for row in monitor_db.select(query, args)]
-                        if ids:
-                            _UPDATE_METADATA_IDS['parent_rating_key_ids'].update(ids)
-                        else:
+                        if not ids:
                             continue
 
-                        monitor_db.action(
-                            "UPDATE session_history SET parent_rating_key = ? "
-                            "WHERE id IN (%s)" % ",".join(ids),
-                            [new_key]
-                        )
-                        monitor_db.action(
-                            "UPDATE session_history_metadata SET parent_rating_key = ? "
-                            "WHERE id IN (%s)" % ",".join(ids),
-                            [new_key]
-                        )
+                        with session_scope() as db_session:
+                            db_session.execute(
+                                update(SessionHistory)
+                                .where(SessionHistory.id.in_(ids))
+                                .values(parent_rating_key=new_key)
+                            )
+                            db_session.execute(
+                                update(SessionHistoryMetadata)
+                                .where(SessionHistoryMetadata.id.in_(ids))
+                                .values(parent_rating_key=new_key)
+                            )
 
                     else:
                         # check rating_key (2 tables)
-                        query = (
-                            "SELECT id FROM session_history "
-                            "WHERE rating_key = ? "
+                        ids = _fetch_ids(
+                            SessionHistory.rating_key,
+                            old_key,
+                            _UPDATE_METADATA_IDS['rating_key_ids'],
                         )
-                        args = [old_key]
-
-                        if _UPDATE_METADATA_IDS['rating_key_ids']:
-                            query += "AND id NOT IN (%s)" % ",".join(_UPDATE_METADATA_IDS['rating_key_ids'])
-
-                        ids = [str(row['id']) for row in monitor_db.select(query, args)]
-                        if ids:
-                            _UPDATE_METADATA_IDS['rating_key_ids'].update(ids)
-                        else:
+                        if not ids:
                             continue
 
-                        monitor_db.action(
-                            "UPDATE session_history SET rating_key = ? "
-                            "WHERE id IN (%s)" % ",".join(ids),
-                            [new_key]
-                        )
-                        monitor_db.action(
-                            "UPDATE session_history_media_info SET rating_key = ? "
-                            "WHERE id IN (%s)" % ",".join(ids),
-                            [new_key]
-                        )
+                        with session_scope() as db_session:
+                            db_session.execute(
+                                update(SessionHistory)
+                                .where(SessionHistory.id.in_(ids))
+                                .values(rating_key=new_key)
+                            )
+                            db_session.execute(
+                                update(SessionHistoryMediaInfo)
+                                .where(SessionHistoryMediaInfo.id.in_(ids))
+                                .values(rating_key=new_key)
+                            )
 
                         # update session_history_metadata table
                         self.update_metadata_details(old_key, new_key, metadata, ids)
@@ -2249,7 +2731,7 @@ class DataFactory(object):
 
     def update_metadata_details(self, old_rating_key='', new_rating_key='', metadata=None, ids=None):
 
-        if metadata:
+        if metadata and ids:
             # Create full_title
             if metadata['media_type'] == 'episode':
                 full_title = '%s - %s' % (metadata['grandparent_title'], metadata['title'])
@@ -2268,35 +2750,52 @@ class DataFactory(object):
             logger.debug("Tautulli DataFactory :: Updating metadata in the database for rating_key %s -> %s.",
                          old_rating_key, new_rating_key)
 
-            monitor_db = database.MonitorDatabase()
+            metadata_values = {
+                'rating_key': metadata['rating_key'],
+                'parent_rating_key': metadata['parent_rating_key'],
+                'grandparent_rating_key': metadata['grandparent_rating_key'],
+                'title': metadata['title'],
+                'parent_title': metadata['parent_title'],
+                'grandparent_title': metadata['grandparent_title'],
+                'original_title': metadata['original_title'],
+                'full_title': full_title,
+                'media_index': metadata['media_index'],
+                'parent_media_index': metadata['parent_media_index'],
+                'thumb': metadata['thumb'],
+                'parent_thumb': metadata['parent_thumb'],
+                'grandparent_thumb': metadata['grandparent_thumb'],
+                'art': metadata['art'],
+                'media_type': metadata['media_type'],
+                'year': metadata['year'],
+                'originally_available_at': metadata['originally_available_at'],
+                'added_at': metadata['added_at'],
+                'updated_at': metadata['updated_at'],
+                'last_viewed_at': metadata['last_viewed_at'],
+                'content_rating': metadata['content_rating'],
+                'summary': metadata['summary'],
+                'tagline': metadata['tagline'],
+                'rating': metadata['rating'],
+                'duration': metadata['duration'],
+                'guid': metadata['guid'],
+                'directors': directors,
+                'writers': writers,
+                'actors': actors,
+                'genres': genres,
+                'studio': metadata['studio'],
+                'labels': labels,
+            }
 
-            query = "UPDATE session_history SET section_id = ? " \
-                    "WHERE id IN (%s)" % ",".join(ids)
-            args = [metadata['section_id']]
-            monitor_db.action(query=query, args=args)
-
-            # Update the session_history_metadata table
-            query = "UPDATE session_history_metadata SET rating_key = ?, parent_rating_key = ?, " \
-                    "grandparent_rating_key = ?, title = ?, parent_title = ?, grandparent_title = ?, " \
-                    "original_title = ?, full_title = ?, " \
-                    "media_index = ?, parent_media_index = ?, thumb = ?, parent_thumb = ?, " \
-                    "grandparent_thumb = ?, art = ?, media_type = ?, year = ?, originally_available_at = ?, " \
-                    "added_at = ?, updated_at = ?, last_viewed_at = ?, content_rating = ?, summary = ?, " \
-                    "tagline = ?, rating = ?, duration = ?, guid = ?, directors = ?, writers = ?, actors = ?, " \
-                    "genres = ?, studio = ?, labels = ? " \
-                    "WHERE id IN (%s)" % ",".join(ids)
-
-            args = [metadata['rating_key'], metadata['parent_rating_key'], metadata['grandparent_rating_key'],
-                    metadata['title'], metadata['parent_title'], metadata['grandparent_title'],
-                    metadata['original_title'], full_title,
-                    metadata['media_index'], metadata['parent_media_index'], metadata['thumb'],
-                    metadata['parent_thumb'], metadata['grandparent_thumb'], metadata['art'], metadata['media_type'],
-                    metadata['year'], metadata['originally_available_at'], metadata['added_at'], metadata['updated_at'],
-                    metadata['last_viewed_at'], metadata['content_rating'], metadata['summary'], metadata['tagline'],
-                    metadata['rating'], metadata['duration'], metadata['guid'], directors, writers, actors, genres,
-                    metadata['studio'], labels]
-
-            monitor_db.action(query=query, args=args)
+            with session_scope() as db_session:
+                db_session.execute(
+                    update(SessionHistory)
+                    .where(SessionHistory.id.in_(ids))
+                    .values(section_id=metadata['section_id'])
+                )
+                db_session.execute(
+                    update(SessionHistoryMetadata)
+                    .where(SessionHistoryMetadata.id.in_(ids))
+                    .values(**metadata_values)
+                )
 
     def get_notification_log(self, kwargs=None):
         data_tables = datatables.DataTables()
@@ -2366,12 +2865,14 @@ class DataFactory(object):
         return dict
 
     def delete_notification_log(self):
-        monitor_db = database.MonitorDatabase()
-
         try:
             logger.info("Tautulli DataFactory :: Clearing notification logs from database.")
-            monitor_db.action("DELETE FROM notify_log")
-            monitor_db.action("VACUUM")
+            with session_scope() as db_session:
+                db_session.execute(delete(NotifyLog))
+
+            engine = get_engine()
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+                connection.execute(text('VACUUM'))
             return True
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for delete_notification_log: %s." % e)
@@ -2438,64 +2939,76 @@ class DataFactory(object):
         return dict
 
     def delete_newsletter_log(self):
-        monitor_db = database.MonitorDatabase()
-
         try:
             logger.info("Tautulli DataFactory :: Clearing newsletter logs from database.")
-            monitor_db.action("DELETE FROM newsletter_log")
-            monitor_db.action("VACUUM")
+            with session_scope() as db_session:
+                db_session.execute(delete(NewsletterLog))
+
+            engine = get_engine()
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+                connection.execute(text('VACUUM'))
             return True
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for delete_newsletter_log: %s." % e)
             return False
 
     def get_user_devices(self, user_id='', history_only=True):
-        monitor_db = database.MonitorDatabase()
-
-        if user_id:
-            if history_only:
-                query = "SELECT machine_id FROM session_history " \
-                        "WHERE user_id = ? " \
-                        "GROUP BY machine_id"
-            else:
-                query = "SELECT * FROM (" \
-                        "SELECT user_id, machine_id FROM session_history " \
-                        "UNION SELECT user_id, machine_id from sessions_continued) " \
-                        "WHERE user_id = ? " \
-                        "GROUP BY machine_id"
-
-            try:
-                result = monitor_db.select(query=query, args=[user_id])
-            except Exception as e:
-                logger.warn("Tautulli DataFactory :: Unable to execute database query for get_user_devices: %s." % e)
-                return []
-        else:
+        if not user_id:
             return []
 
-        return [d['machine_id'] for d in result]
+        try:
+            user_id_int = int(user_id)
+        except (TypeError, ValueError):
+            return []
+
+        try:
+            if history_only:
+                stmt = (
+                    select(distinct(SessionHistory.machine_id))
+                    .where(SessionHistory.user_id == user_id_int)
+                )
+            else:
+                history_stmt = (
+                    select(SessionHistory.machine_id)
+                    .where(SessionHistory.user_id == user_id_int)
+                )
+                continued_stmt = (
+                    select(SessionContinued.machine_id)
+                    .where(SessionContinued.user_id == user_id_int)
+                )
+                union_stmt = history_stmt.union(continued_stmt).subquery()
+                stmt = select(distinct(union_stmt.c.machine_id))
+
+            with session_scope() as db_session:
+                result = db_session.execute(stmt).scalars().all()
+        except Exception as e:
+            logger.warn("Tautulli DataFactory :: Unable to execute database query for get_user_devices: %s." % e)
+            return []
+
+        return [machine_id for machine_id in result if machine_id]
 
     def get_recently_added_item(self, rating_key=''):
-        monitor_db = database.MonitorDatabase()
+        if not rating_key:
+            return []
 
-        if rating_key:
-            try:
-                query = "SELECT * FROM recently_added WHERE rating_key = ?"
-                result = monitor_db.select(query=query, args=[rating_key])
-            except Exception as e:
-                logger.warn("Tautulli DataFactory :: Unable to execute database query for get_recently_added_item: %s." % e)
-                return []
-        else:
+        try:
+            rating_key_int = int(rating_key)
+        except (TypeError, ValueError):
+            return []
+
+        try:
+            stmt = select(RecentlyAdded.__table__).where(RecentlyAdded.rating_key == rating_key_int)
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
+        except Exception as e:
+            logger.warn("Tautulli DataFactory :: Unable to execute database query for get_recently_added_item: %s." % e)
             return []
 
         return result
 
     def set_recently_added_item(self, rating_key=''):
-        monitor_db = database.MonitorDatabase()
-
         pms_connect = pmsconnect.PmsConnect()
         metadata = pms_connect.get_metadata_details(rating_key)
-
-        keys = {'rating_key': metadata['rating_key']}
 
         values = {'added_at': metadata['added_at'],
                   'section_id': metadata['section_id'],
@@ -2506,7 +3019,16 @@ class DataFactory(object):
                   }
 
         try:
-            monitor_db.upsert(table_name='recently_added', key_dict=keys, value_dict=values)
+            with session_scope() as db_session:
+                stmt = (
+                    update(RecentlyAdded)
+                    .where(RecentlyAdded.rating_key == metadata['rating_key'])
+                    .values(**values)
+                )
+                result = db_session.execute(stmt)
+                if not result.rowcount:
+                    insert_values = {'rating_key': metadata['rating_key'], **values}
+                    db_session.execute(insert(RecentlyAdded).values(**insert_values))
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for set_recently_added_item: %s." % e)
             return False

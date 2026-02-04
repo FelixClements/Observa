@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import Integer, Text, text
+from sqlalchemy import ForeignKey, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from plexpy.db.models import Base, auto_pk
@@ -96,7 +96,10 @@ class NotifyLog(Base):
     grandparent_rating_key: Mapped[Optional[int]] = mapped_column(Integer)
     user_id: Mapped[Optional[int]] = mapped_column(Integer)
     user: Mapped[Optional[str]] = mapped_column(Text)
-    notifier_id: Mapped[Optional[int]] = mapped_column(Integer)
+    notifier_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey('notifiers.id', ondelete='SET NULL'),
+    )
     agent_id: Mapped[Optional[int]] = mapped_column(Integer)
     agent_name: Mapped[Optional[str]] = mapped_column(Text)
     notify_action: Mapped[Optional[str]] = mapped_column(Text)

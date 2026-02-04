@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 from sqlalchemy import Integer, Text, create_engine, inspect, insert, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import CircularDependencyError, SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import UniqueConstraint
 
@@ -92,7 +92,12 @@ def run_migration(sqlite_path: Optional[str] = None, confirm_overwrite: bool = F
     try:
         sqlite_engine = create_engine(f"sqlite:///{sqlite_path}")
         sqlite_connection = sqlite_engine.connect()
-        tables = list(Base.metadata.sorted_tables)
+        try:
+            tables = list(Base.metadata.sorted_tables)
+        except CircularDependencyError as exc:
+            raise MigrationError(
+                "SQLite migration :: Foreign key dependency cycle detected in metadata."
+            ) from exc
 
         _truncate_tables(engine, tables)
 
@@ -144,6 +149,8 @@ def _validate_sqlite(sqlite_path: str) -> None:
         integrity = connection.execute(text("PRAGMA quick_check")).fetchone()
         if not integrity or integrity[0] != 'ok':
             raise MigrationError("SQLite integrity check failed: %s" % (integrity[0] if integrity else 'unknown'))
+
+        _validate_fk_orphans(connection)
     except SQLAlchemyError as exc:
         raise MigrationError("SQLite validation error: %s" % exc)
     finally:
@@ -204,6 +211,47 @@ def _migrate_tables(sqlite_connection, engine: Engine, tables: Sequence) -> List
         })
 
     return report
+
+
+def _validate_fk_orphans(sqlite_connection) -> None:
+    checks = [
+        (
+            'session_history_metadata.id -> session_history.id',
+            "SELECT COUNT(*) FROM session_history_metadata shm "
+            "LEFT JOIN session_history sh ON sh.id = shm.id "
+            "WHERE sh.id IS NULL",
+        ),
+        (
+            'session_history_media_info.id -> session_history.id',
+            "SELECT COUNT(*) FROM session_history_media_info shmi "
+            "LEFT JOIN session_history sh ON sh.id = shmi.id "
+            "WHERE sh.id IS NULL",
+        ),
+        (
+            'session_history.user_id -> users.user_id',
+            "SELECT COUNT(*) FROM session_history sh "
+            "LEFT JOIN users u ON u.user_id = sh.user_id "
+            "WHERE sh.user_id IS NOT NULL AND u.user_id IS NULL",
+        ),
+        (
+            'notify_log.notifier_id -> notifiers.id',
+            "SELECT COUNT(*) FROM notify_log nl "
+            "LEFT JOIN notifiers n ON n.id = nl.notifier_id "
+            "WHERE nl.notifier_id IS NOT NULL AND n.id IS NULL",
+        ),
+        (
+            'newsletter_log.newsletter_id -> newsletters.id',
+            "SELECT COUNT(*) FROM newsletter_log nwl "
+            "LEFT JOIN newsletters n ON n.id = nwl.newsletter_id "
+            "WHERE nwl.newsletter_id IS NOT NULL AND n.id IS NULL",
+        ),
+    ]
+
+    for label, query in checks:
+        result = sqlite_connection.execute(text(query)).fetchone()
+        count = result[0] if result else 0
+        if count:
+            raise MigrationError("SQLite database has %s orphaned rows for %s." % (count, label))
 
 
 def _copy_table_data(
