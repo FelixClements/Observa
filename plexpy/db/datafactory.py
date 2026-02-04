@@ -1281,7 +1281,7 @@ class DataFactory(object):
                     if str(rating_key).isdigit():
                         query = "SELECT (SUM(stopped - started) - " \
                                 "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, section_id " \
+                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
                                 "FROM session_history " \
                                 "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                                 "WHERE stopped >= ? " \
@@ -1295,7 +1295,7 @@ class DataFactory(object):
                     elif guid:
                         query = "SELECT (SUM(stopped - started) - " \
                                 "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, section_id " \
+                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
                                 "FROM session_history " \
                                 "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                                 "WHERE stopped >= ? " \
@@ -1308,7 +1308,7 @@ class DataFactory(object):
                     if str(rating_key).isdigit():
                         query = "SELECT (SUM(stopped - started) - " \
                                 "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, section_id " \
+                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
                                 "FROM session_history " \
                                 "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                                 "WHERE (session_history.grandparent_rating_key IN (%s) " \
@@ -1321,7 +1321,7 @@ class DataFactory(object):
                     elif guid:
                         query = "SELECT (SUM(stopped - started) - " \
                                 "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                                "COUNT(DISTINCT %s) AS total_plays, section_id " \
+                                "COUNT(DISTINCT %s) AS total_plays, MAX(session_history.section_id) AS section_id " \
                                 "FROM session_history " \
                                 "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                                 "WHERE session_history_metadata.guid = ? " % group_by
@@ -1383,14 +1383,15 @@ class DataFactory(object):
                         "users.user_id, users.username, users.thumb, users.custom_avatar_url AS custom_thumb, " \
                         "COUNT(DISTINCT %s) AS total_plays, (SUM(stopped - started) - " \
                         "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                        "section_id " \
+                        "MAX(session_history.section_id) AS section_id " \
                         "FROM session_history " \
                         "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                         "JOIN users ON users.user_id = session_history.user_id " \
                         "WHERE (session_history.grandparent_rating_key IN (%s) " \
                         "OR session_history.parent_rating_key IN (%s) " \
                         "OR session_history.rating_key IN (%s)) " \
-                        "GROUP BY users.user_id " \
+                        "GROUP BY users.user_id, users.username, users.friendly_name, users.thumb, " \
+                        "users.custom_avatar_url " \
                         "ORDER BY total_plays DESC, total_time DESC" % (
                             group_by, rating_keys_arg, rating_keys_arg, rating_keys_arg
                         )
@@ -1402,12 +1403,13 @@ class DataFactory(object):
                         "users.user_id, users.username, users.thumb, users.custom_avatar_url AS custom_thumb, " \
                         "COUNT(DISTINCT %s) AS total_plays, (SUM(stopped - started) - " \
                         "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                        "section_id " \
+                        "MAX(session_history.section_id) AS section_id " \
                         "FROM session_history " \
                         "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                         "JOIN users ON users.user_id = session_history.user_id " \
                         "WHERE session_history_metadata.guid = ? " \
-                        "GROUP BY users.user_id " \
+                        "GROUP BY users.user_id, users.username, users.friendly_name, users.thumb, " \
+                        "users.custom_avatar_url " \
                         "ORDER BY total_plays DESC, total_time DESC" % group_by
 
                 result = monitor_db.select(query, args=[guid])

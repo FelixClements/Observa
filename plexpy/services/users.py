@@ -277,31 +277,31 @@ class Users(object):
 
         custom_where = ['users.user_id', user_id]
 
-        columns = ["session_history.id AS history_row_id",
+        columns = ["MAX(session_history.id) AS history_row_id",
                    "MIN(session_history.started) AS first_seen",
                    "MAX(session_history.started) AS last_seen",
                    "session_history.ip_address",
                    "COUNT(session_history.id) AS play_count",
-                   "session_history.platform",
-                   "session_history.player",
-                   "session_history.rating_key",
-                   "session_history_metadata.full_title AS last_played",
-                   "session_history_metadata.thumb",
-                   "session_history_metadata.parent_thumb",
-                   "session_history_metadata.grandparent_thumb",
-                   "session_history_metadata.media_type",
-                   "session_history_metadata.parent_title",
-                   "session_history_metadata.year",
-                   "session_history_metadata.media_index",
-                   "session_history_metadata.parent_media_index",
-                   "session_history_metadata.live",
-                   "session_history_metadata.added_at",
-                   "session_history_metadata.originally_available_at",
-                   "session_history_metadata.guid",
-                   "session_history_media_info.transcode_decision",
-                   "session_history.user",
-                   "session_history.user_id as custom_user_id",
-                   "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
+                   "MAX(session_history.platform) AS platform",
+                   "MAX(session_history.player) AS player",
+                   "MAX(session_history.rating_key) AS rating_key",
+                   "MAX(session_history_metadata.full_title) AS last_played",
+                   "MAX(session_history_metadata.thumb) AS thumb",
+                   "MAX(session_history_metadata.parent_thumb) AS parent_thumb",
+                   "MAX(session_history_metadata.grandparent_thumb) AS grandparent_thumb",
+                   "MAX(session_history_metadata.media_type) AS media_type",
+                   "MAX(session_history_metadata.parent_title) AS parent_title",
+                   "MAX(session_history_metadata.year) AS year",
+                   "MAX(session_history_metadata.media_index) AS media_index",
+                   "MAX(session_history_metadata.parent_media_index) AS parent_media_index",
+                   "MAX(session_history_metadata.live) AS live",
+                   "MAX(session_history_metadata.added_at) AS added_at",
+                   "MAX(session_history_metadata.originally_available_at) AS originally_available_at",
+                   "MAX(session_history_metadata.guid) AS guid",
+                   "MAX(session_history_media_info.transcode_decision) AS transcode_decision",
+                   "MAX(session_history.user) AS user",
+                   "MAX(session_history.user_id) as custom_user_id",
+                   "MAX(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
                     THEN users.username ELSE users.friendly_name END) AS friendly_name"
                    ]
 
@@ -602,7 +602,7 @@ class Users(object):
             if str(user_id).isdigit():
                 query = "SELECT player, COUNT(DISTINCT %s) as total_plays, (SUM(stopped - started) - " \
                         "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
-                        "platform " \
+                        "MAX(platform) AS platform " \
                         "FROM session_history " \
                         "WHERE user_id = ? " \
                         "GROUP BY player " \
@@ -643,17 +643,26 @@ class Users(object):
 
         try:
             if str(user_id).isdigit():
-                query = "SELECT session_history.id, session_history.media_type, guid, " \
-                        "session_history.rating_key, session_history.parent_rating_key, session_history.grandparent_rating_key, " \
-                        "title, parent_title, grandparent_title, original_title, " \
-                        "thumb, parent_thumb, grandparent_thumb, media_index, parent_media_index, " \
-                        "year, originally_available_at, added_at, live, started, user " \
-                        "FROM session_history_metadata " \
-                        "JOIN session_history ON session_history_metadata.id = session_history.id " \
-                        "WHERE user_id = ? " \
-                        "GROUP BY (CASE WHEN session_history.media_type = 'track' THEN session_history.parent_rating_key " \
-                        "   ELSE session_history.rating_key END) " \
-                        "ORDER BY MAX(started) DESC LIMIT ?"
+                query = "SELECT sh.id, sh.media_type, shm.guid, " \
+                        "sh.rating_key, sh.parent_rating_key, sh.grandparent_rating_key, " \
+                        "shm.title, shm.parent_title, shm.grandparent_title, shm.original_title, " \
+                        "shm.thumb, shm.parent_thumb, shm.grandparent_thumb, shm.media_index, shm.parent_media_index, " \
+                        "shm.year, shm.originally_available_at, shm.added_at, shm.live, sh.started, sh.user " \
+                        "FROM session_history_metadata shm " \
+                        "JOIN session_history sh ON shm.id = sh.id " \
+                        "WHERE sh.user_id = ? " \
+                        "AND sh.id = (" \
+                        "    SELECT sh_inner.id " \
+                        "    FROM session_history sh_inner " \
+                        "    WHERE sh_inner.user_id = sh.user_id " \
+                        "    AND (CASE WHEN sh_inner.media_type = 'track' THEN sh_inner.parent_rating_key " \
+                        "         ELSE sh_inner.rating_key END) " \
+                        "        = (CASE WHEN sh.media_type = 'track' THEN sh.parent_rating_key " \
+                        "           ELSE sh.rating_key END) " \
+                        "    ORDER BY sh_inner.started DESC, sh_inner.id DESC " \
+                        "    LIMIT 1" \
+                        ") " \
+                        "ORDER BY sh.started DESC LIMIT ?"
                 result = monitor_db.select(query, args=[user_id, limit])
             else:
                 result = []

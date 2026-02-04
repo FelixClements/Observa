@@ -500,10 +500,10 @@ class Libraries(object):
 
         try:
             query = "SELECT MAX(started) AS last_played, COUNT(DISTINCT %s) AS play_count, " \
-                    "rating_key, parent_rating_key, grandparent_rating_key " \
+                    "%s " \
                     "FROM session_history " \
                     "WHERE section_id = ? " \
-                    "GROUP BY %s " % (count_by, group_by)
+                    "GROUP BY %s " % (count_by, group_by, group_by)
             result = monitor_db.select(query, args=[section_id])
         except Exception as e:
             logger.warn("Tautulli Libraries :: Unable to execute database query for get_datatables_media_info2: %s." % e)
@@ -990,7 +990,7 @@ class Libraries(object):
                         "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                         "JOIN users ON users.user_id = session_history.user_id " \
                         "WHERE section_id = ? " \
-                        "GROUP BY users.user_id " \
+                        "GROUP BY users.user_id, users.username, users.friendly_name, users.thumb, users.custom_avatar_url " \
                         "ORDER BY total_plays DESC, total_time DESC" % group_by
                 result = monitor_db.select(query, args=[section_id])
             else:
@@ -1030,16 +1030,24 @@ class Libraries(object):
 
         try:
             if str(section_id).isdigit():
-                query = "SELECT session_history.id, session_history.media_type, guid, " \
-                        "session_history.rating_key, session_history.parent_rating_key, session_history.grandparent_rating_key, " \
-                        "title, parent_title, grandparent_title, original_title, " \
-                        "thumb, parent_thumb, grandparent_thumb, media_index, parent_media_index, " \
-                        "year, originally_available_at, added_at, live, started, user, content_rating, labels, section_id " \
-                        "FROM session_history_metadata " \
-                        "JOIN session_history ON session_history_metadata.id = session_history.id " \
-                        "WHERE section_id = ? " \
-                        "GROUP BY session_history.rating_key " \
-                        "ORDER BY MAX(started) DESC LIMIT ?"
+                query = "SELECT sh.id, sh.media_type, shm.guid, " \
+                        "sh.rating_key, sh.parent_rating_key, sh.grandparent_rating_key, " \
+                        "shm.title, shm.parent_title, shm.grandparent_title, shm.original_title, " \
+                        "shm.thumb, shm.parent_thumb, shm.grandparent_thumb, shm.media_index, shm.parent_media_index, " \
+                        "shm.year, shm.originally_available_at, shm.added_at, shm.live, sh.started, sh.user, " \
+                        "shm.content_rating, shm.labels, sh.section_id " \
+                        "FROM session_history_metadata shm " \
+                        "JOIN session_history sh ON shm.id = sh.id " \
+                        "WHERE sh.section_id = ? " \
+                        "AND sh.id = (" \
+                        "    SELECT sh_inner.id " \
+                        "    FROM session_history sh_inner " \
+                        "    WHERE sh_inner.section_id = sh.section_id " \
+                        "    AND sh_inner.rating_key = sh.rating_key " \
+                        "    ORDER BY sh_inner.started DESC, sh_inner.id DESC " \
+                        "    LIMIT 1" \
+                        ") " \
+                        "ORDER BY sh.started DESC LIMIT ?"
                 result = monitor_db.select(query, args=[section_id, limit])
             else:
                 result = []
