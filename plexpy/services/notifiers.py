@@ -36,6 +36,7 @@ import paho.mqtt.client
 import paho.mqtt.publish
 import requests
 from requests.auth import HTTPBasicAuth
+from sqlalchemy import delete, insert, select, true, update
 
 try:
     from cryptography.hazmat.primitives import hashes
@@ -55,7 +56,9 @@ from plexpy.integrations import pmsconnect
 from plexpy.services import mobile_app
 from plexpy.services import users
 from plexpy.util import request
-from plexpy.db import database
+from plexpy.db import queries
+from plexpy.db.models import MobileDevice, Notifier as NotifierModel, NotifyLog as NotifyLogModel
+from plexpy.db.session import session_scope
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -487,35 +490,45 @@ def get_notify_actions(return_dict=False):
 def get_notifiers(notifier_id=None, notify_action=None):
     notify_actions = get_notify_actions()
 
-    where = where_id = where_action = ''
-    args = []
+    try:
+        with session_scope() as db_session:
+            last_notify_log = (
+                select(
+                    NotifyLogModel.timestamp.label('last_triggered'),
+                    NotifyLogModel.success.label('last_success'),
+                )
+                .where(NotifyLogModel.notifier_id == NotifierModel.id)
+                .order_by(NotifyLogModel.timestamp.desc(), NotifyLogModel.id.desc())
+                .limit(1)
+                .lateral('last_notify_log')
+            )
 
-    if notifier_id or notify_action:
-        where = 'WHERE '
-        if notifier_id:
-            where_id += 'notifiers.id = ?'
-            args.append(notifier_id)
-        if notify_action and notify_action in notify_actions:
-            where_action = '%s = ?' % notify_action
-            args.append(1)
-        where += ' AND '.join([w for w in [where_id, where_action] if w])
+            columns = [
+                NotifierModel.id,
+                NotifierModel.agent_id,
+                NotifierModel.agent_name,
+                NotifierModel.agent_label,
+                NotifierModel.friendly_name,
+            ] + [getattr(NotifierModel, action) for action in notify_actions]
+            columns.extend([
+                last_notify_log.c.last_triggered,
+                last_notify_log.c.last_success,
+            ])
 
-    db = database.MonitorDatabase()
-    result = db.select(
-        (
-            "SELECT notifiers.id, notifiers.agent_id, notifiers.agent_name, notifiers.agent_label, notifiers.friendly_name, %s, "
-            "last_notify_log.last_triggered, last_notify_log.last_success "
-            "FROM notifiers "
-            "LEFT JOIN LATERAL ("
-            "SELECT notify_log.timestamp AS last_triggered, notify_log.success AS last_success "
-            "FROM notify_log "
-            "WHERE notify_log.notifier_id = notifiers.id "
-            "ORDER BY notify_log.timestamp DESC, notify_log.id DESC "
-            "LIMIT 1"
-            ") AS last_notify_log ON TRUE "
-            "%s"
-        ) % (', '.join(notify_actions), where), args=args
-    )
+            stmt = (
+                select(*columns)
+                .select_from(NotifierModel)
+                .outerjoin(last_notify_log, true())
+            )
+            if notifier_id:
+                stmt = stmt.where(NotifierModel.id == notifier_id)
+            if notify_action and notify_action in notify_actions:
+                stmt = stmt.where(getattr(NotifierModel, notify_action) == 1)
+
+            result = queries.fetch_mappings(db_session, stmt)
+    except Exception as e:
+        logger.warn("Tautulli Notifiers :: Unable to execute database query for get_notifiers: %s." % e)
+        return []
 
     for item in result:
         item['active'] = int(any([item.pop(k) for k in list(item.keys()) if k in notify_actions]))
@@ -524,12 +537,12 @@ def get_notifiers(notifier_id=None, notify_action=None):
 
 
 def delete_notifier(notifier_id=None):
-    db = database.MonitorDatabase()
-
     if str(notifier_id).isdigit():
         logger.debug("Tautulli Notifiers :: Deleting notifier_id %s from the database."
                      % notifier_id)
-        result = db.action("DELETE FROM notifiers WHERE id = ?", args=[notifier_id])
+        with session_scope() as db_session:
+            stmt = delete(NotifierModel).where(NotifierModel.id == notifier_id)
+            db_session.execute(stmt)
         return True
     else:
         return False
@@ -543,8 +556,9 @@ def get_notifier_config(notifier_id=None, mask_passwords=False):
                      % notifier_id)
         return None
 
-    db = database.MonitorDatabase()
-    result = db.select_single("SELECT * FROM notifiers WHERE id = ?", args=[notifier_id])
+    with session_scope() as db_session:
+        stmt = select(NotifierModel.__table__).where(NotifierModel.id == notifier_id)
+        result = queries.fetch_mapping(db_session, stmt, default={})
 
     if not result:
         return None
@@ -629,10 +643,12 @@ def add_notifier_config(agent_id=None, **kwargs):
             values[a['name'] + '_subject'] = a['subject']
             values[a['name'] + '_body'] = a['body']
 
-    db = database.MonitorDatabase()
     try:
-        db.upsert(table_name='notifiers', key_dict=keys, value_dict=values)
-        notifier_id = db.last_insert_id()
+        with session_scope() as db_session:
+            stmt = insert(NotifierModel).values(**values).returning(NotifierModel.id)
+            notifier_id = db_session.execute(stmt).scalar_one_or_none()
+        if notifier_id is None:
+            raise ValueError("Notifier insert failed")
         logger.info("Tautulli Notifiers :: Added new notification agent: %s (notifier_id %s)."
                     % (agent['label'], notifier_id))
         blacklist_logger()
@@ -696,9 +712,18 @@ def set_notifier_config(notifier_id=None, agent_id=None, **kwargs):
     values.update(subject_text)
     values.update(body_text)
 
-    db = database.MonitorDatabase()
     try:
-        db.upsert(table_name='notifiers', key_dict=keys, value_dict=values)
+        with session_scope() as db_session:
+            stmt = (
+                update(NotifierModel)
+                .where(NotifierModel.id == notifier_id)
+                .values(**values)
+            )
+            result = db_session.execute(stmt)
+            if not (result.rowcount and result.rowcount > 0):
+                insert_values = {'id': notifier_id}
+                insert_values.update(values)
+                db_session.execute(insert(NotifierModel).values(**insert_values))
         logger.info("Tautulli Notifiers :: Updated notification agent: %s (notifier_id %s)."
                     % (agent['label'], notifier_id))
         blacklist_logger()
@@ -787,8 +812,9 @@ def validate_conditions(custom_conditions):
 
 
 def blacklist_logger():
-    db = database.MonitorDatabase()
-    notifiers = db.select('SELECT notifier_config FROM notifiers')
+    with session_scope() as db_session:
+        stmt = select(NotifierModel.notifier_config)
+        notifiers = queries.fetch_mappings(db_session, stmt)
 
     for n in notifiers:
         config = json.loads(n['notifier_config'] or '{}')
@@ -4090,12 +4116,17 @@ class TAUTULLIREMOTEAPP(Notifier):
         return self.make_request('https://api.onesignal.com/notifications', headers=headers, json=payload)
 
     def get_devices(self):
-        db = database.MonitorDatabase()
-
         try:
-            query = "SELECT * FROM mobile_devices WHERE official = 1 " \
-                    "AND onesignal_id IS NOT NULL AND onesignal_id != ''"
-            return db.select(query=query)
+            with session_scope() as db_session:
+                stmt = (
+                    select(MobileDevice.__table__)
+                    .where(
+                        MobileDevice.official == 1,
+                        MobileDevice.onesignal_id.is_not(None),
+                        MobileDevice.onesignal_id != '',
+                    )
+                )
+                return queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Notifiers :: Unable to retrieve Tautulli Remote app devices list: %s." % e)
             return []
@@ -4707,10 +4738,15 @@ def check_browser_enabled():
 
 
 def get_browser_notifications():
-    db = database.MonitorDatabase()
-    result = db.select("SELECT notifier_id, subject_text, body_text FROM notify_log "
-                       "WHERE agent_id = 17 AND timestamp >= ? ",
-                       args=[time.time() - 5])
+    with session_scope() as db_session:
+        stmt = (
+            select(NotifyLogModel.notifier_id, NotifyLogModel.subject_text, NotifyLogModel.body_text)
+            .where(
+                NotifyLogModel.agent_id == 17,
+                NotifyLogModel.timestamp >= time.time() - 5,
+            )
+        )
+        result = queries.fetch_mappings(db_session, stmt)
 
     notifications = []
     for item in result:

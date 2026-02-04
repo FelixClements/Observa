@@ -16,8 +16,13 @@
 import threading
 
 import plexpy
+from sqlalchemy import func, select, update
+
 from plexpy.integrations import pmsconnect
-from plexpy.db import database
+from plexpy.db import queries
+from plexpy.db.models import Session as SessionModel
+from plexpy.db.queries import time as time_queries
+from plexpy.db.session import session_scope
 from plexpy.integrations import plextv
 from plexpy.services import activity_handler
 from plexpy.services import activity_processor
@@ -36,7 +41,6 @@ int_ping_count = 0
 def check_active_sessions(ws_request=False):
 
     with monitor_lock:
-        monitor_db = database.MonitorDatabase()
         monitor_process = activity_processor.ActivityProcessor()
         db_streams = monitor_process.get_sessions()
 
@@ -83,23 +87,45 @@ def check_active_sessions(ws_request=False):
                                 # Using the set config parameter as the interval, probably not the most accurate but
                                 # it will have to do for now. If it's a websocket request don't use this method.
                                 paused_counter = int(stream['paused_counter']) + plexpy.CONFIG.MONITORING_INTERVAL
-                                monitor_db.action("UPDATE sessions SET paused_counter = ? "
-                                                  "WHERE session_key = ? AND rating_key = ?",
-                                                  [paused_counter, stream['session_key'], stream['rating_key']])
+                                with session_scope() as db_session:
+                                    stmt = (
+                                        update(SessionModel)
+                                        .where(
+                                            SessionModel.session_key == stream['session_key'],
+                                            SessionModel.rating_key == stream['rating_key'],
+                                        )
+                                        .values(paused_counter=paused_counter)
+                                    )
+                                    db_session.execute(stmt)
 
                             if session['state'] == 'buffering' and plexpy.CONFIG.BUFFER_THRESHOLD > 0:
                                 # The stream is buffering so we need to increment the buffer_count
                                 # We're going just increment on every monitor ping,
                                 # would be difficult to keep track otherwise
-                                monitor_db.action("UPDATE sessions SET buffer_count = buffer_count + 1 "
-                                                  "WHERE session_key = ? AND rating_key = ?",
-                                                  [stream['session_key'], stream['rating_key']])
+                                with session_scope() as db_session:
+                                    stmt = (
+                                        update(SessionModel)
+                                        .where(
+                                            SessionModel.session_key == stream['session_key'],
+                                            SessionModel.rating_key == stream['rating_key'],
+                                        )
+                                        .values(buffer_count=SessionModel.buffer_count + 1)
+                                    )
+                                    db_session.execute(stmt)
 
                                 # Check the current buffer count and last buffer to determine if we should notify
-                                buffer_values = monitor_db.select("SELECT buffer_count, buffer_last_triggered "
-                                                                  "FROM sessions "
-                                                                  "WHERE session_key = ? AND rating_key = ?",
-                                                                  [stream['session_key'], stream['rating_key']])
+                                with session_scope() as db_session:
+                                    stmt = (
+                                        select(SessionModel.buffer_count, SessionModel.buffer_last_triggered)
+                                        .where(
+                                            SessionModel.session_key == stream['session_key'],
+                                            SessionModel.rating_key == stream['rating_key'],
+                                        )
+                                    )
+                                    buffer_values = queries.fetch_mappings(db_session, stmt)
+
+                                if not buffer_values:
+                                    continue
 
                                 if buffer_values[0]['buffer_count'] >= plexpy.CONFIG.BUFFER_THRESHOLD:
                                     # Push any notifications -
@@ -109,12 +135,16 @@ def check_active_sessions(ws_request=False):
                                         logger.info("Tautulli Monitor :: User '%s' has triggered a buffer warning."
                                                     % stream['user'])
                                         # Set the buffer trigger time
-                                        monitor_db.action(
-                                            "UPDATE sessions "
-                                            "SET buffer_last_triggered = EXTRACT(EPOCH FROM NOW())::int "
-                                            "WHERE session_key = ? AND rating_key = ?",
-                                            [stream['session_key'], stream['rating_key']],
-                                        )
+                                        with session_scope() as db_session:
+                                            stmt = (
+                                                update(SessionModel)
+                                                .where(
+                                                    SessionModel.session_key == stream['session_key'],
+                                                    SessionModel.rating_key == stream['rating_key'],
+                                                )
+                                                .values(buffer_last_triggered=time_queries.epoch(func.now()))
+                                            )
+                                            db_session.execute(stmt)
 
                                         plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_buffer'})
 
@@ -125,12 +155,16 @@ def check_active_sessions(ws_request=False):
                                             logger.info("Tautulli Monitor :: User '%s' has triggered multiple buffer warnings."
                                                     % stream['user'])
                                             # Set the buffer trigger time
-                                            monitor_db.action(
-                                                "UPDATE sessions "
-                                                "SET buffer_last_triggered = EXTRACT(EPOCH FROM NOW())::int "
-                                                "WHERE session_key = ? AND rating_key = ?",
-                                                [stream['session_key'], stream['rating_key']],
-                                            )
+                                            with session_scope() as db_session:
+                                                stmt = (
+                                                    update(SessionModel)
+                                                    .where(
+                                                        SessionModel.session_key == stream['session_key'],
+                                                        SessionModel.rating_key == stream['rating_key'],
+                                                    )
+                                                    .values(buffer_last_triggered=time_queries.epoch(func.now()))
+                                                )
+                                                db_session.execute(stmt)
 
                                             plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_buffer'})
 
@@ -159,9 +193,16 @@ def check_active_sessions(ws_request=False):
                         if not stream['stopped']:
                             # Set the stream stop time
                             stream['stopped'] = helpers.timestamp()
-                            monitor_db.action("UPDATE sessions SET stopped = ?, state = ? "
-                                              "WHERE session_key = ? AND rating_key = ?",
-                                              [stream['stopped'], 'stopped', stream['session_key'], stream['rating_key']])
+                            with session_scope() as db_session:
+                                stmt = (
+                                    update(SessionModel)
+                                    .where(
+                                        SessionModel.session_key == stream['session_key'],
+                                        SessionModel.rating_key == stream['rating_key'],
+                                    )
+                                    .values(stopped=stream['stopped'], state='stopped')
+                                )
+                                db_session.execute(stmt)
 
                         progress_percent = helpers.get_percent(stream['view_offset'], stream['duration'])
                         notify_states = notification_handler.get_notify_state(session=stream)

@@ -17,11 +17,18 @@ from collections import defaultdict
 import json
 
 import plexpy
+from sqlalchemy import delete, func, insert, select, update
+
 from plexpy.integrations import pmsconnect
 from plexpy.services import libraries
 from plexpy.services import users
 from plexpy.db import maintenance
 from plexpy.db import database
+from plexpy.db import queries
+from plexpy.db.models import Session as SessionModel
+from plexpy.db.models import SessionContinued
+from plexpy.db.queries import time as time_queries
+from plexpy.db.session import session_scope
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -566,42 +573,37 @@ class ActivityProcessor(object):
         db.action(query=query, args=args)
 
     def get_sessions(self, user_id=None, ip_address=None):
-        db = database.MonitorDatabase()
-        query = "SELECT * FROM sessions"
-        args = []
+        stmt = select(SessionModel.__table__)
 
         if str(user_id).isdigit():
-            ip = " GROUP BY ip_address" if ip_address else ""
-            query += " WHERE user_id = ?" + ip
-            args.append(user_id)
+            stmt = stmt.where(SessionModel.user_id == user_id)
+            if ip_address:
+                stmt = stmt.distinct(SessionModel.ip_address)
 
-        sessions = db.select(query, args)
-        return sessions
+        with session_scope() as db_session:
+            return queries.fetch_mappings(db_session, stmt)
 
     def get_session_by_key(self, session_key=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            session = db.select_single("SELECT * FROM sessions "
-                                            "WHERE session_key = ? ",
-                                            args=[session_key])
-            if session:
-                return session
+            with session_scope() as db_session:
+                stmt = select(SessionModel.__table__).where(SessionModel.session_key == session_key)
+                session_data = queries.fetch_mapping(db_session, stmt, default={})
+            if session_data:
+                return session_data
 
         return None
 
     def get_session_by_id(self, session_id=None):
-        db = database.MonitorDatabase()
         if session_id:
-            session = db.select_single("SELECT * FROM sessions "
-                                            "WHERE session_id = ? ",
-                                            args=[session_id])
-            if session:
-                return session
+            with session_scope() as db_session:
+                stmt = select(SessionModel.__table__).where(SessionModel.session_id == session_id)
+                session_data = queries.fetch_mapping(db_session, stmt, default={})
+            if session_data:
+                return session_data
 
         return None
 
     def set_session_state(self, session_key=None, state=None, **kwargs):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
             values = {}
 
@@ -611,26 +613,41 @@ class ActivityProcessor(object):
             for k, v in kwargs.items():
                 values[k] = v
 
-            keys = {'session_key': session_key}
-            result = db.upsert('sessions', values, keys)
+            with session_scope() as db_session:
+                stmt = (
+                    update(SessionModel)
+                    .where(SessionModel.session_key == session_key)
+                    .values(**values)
+                )
+                result = db_session.execute(stmt)
+                if result.rowcount and result.rowcount > 0:
+                    return 'update'
 
-            return result
+                insert_values = {'session_key': session_key}
+                insert_values.update(values)
+                db_session.execute(insert(SessionModel).values(**insert_values))
+                return 'insert'
 
         return None
 
     def delete_session(self, session_key=None, row_id=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            db.action("DELETE FROM sessions WHERE session_key = ?", [session_key])
+            with session_scope() as db_session:
+                stmt = delete(SessionModel).where(SessionModel.session_key == session_key)
+                db_session.execute(stmt)
         elif str(row_id).isdigit():
-            db.action("DELETE FROM sessions WHERE id = ?", [row_id])
+            with session_scope() as db_session:
+                stmt = delete(SessionModel).where(SessionModel.id == row_id)
+                db_session.execute(stmt)
 
     def set_session_last_paused(self, session_key=None, timestamp=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            result = db.select("SELECT last_paused, paused_counter "
-                                    "FROM sessions "
-                                    "WHERE session_key = ?", args=[session_key])
+            with session_scope() as db_session:
+                stmt = (
+                    select(SessionModel.last_paused, SessionModel.paused_counter)
+                    .where(SessionModel.session_key == session_key)
+                )
+                result = queries.fetch_mappings(db_session, stmt)
 
             paused_counter = None
             for session in result:
@@ -646,90 +663,150 @@ class ActivityProcessor(object):
             if paused_counter:
                 values['paused_counter'] = paused_counter
 
-            keys = {'session_key': session_key}
-            db.upsert('sessions', values, keys)
+            with session_scope() as db_session:
+                stmt = (
+                    update(SessionModel)
+                    .where(SessionModel.session_key == session_key)
+                    .values(**values)
+                )
+                result = db_session.execute(stmt)
+                if result.rowcount and result.rowcount > 0:
+                    return
+
+                insert_values = {'session_key': session_key}
+                insert_values.update(values)
+                db_session.execute(insert(SessionModel).values(**insert_values))
 
     def increment_session_buffer_count(self, session_key=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            db.action("UPDATE sessions SET buffer_count = buffer_count + 1 "
-                           "WHERE session_key = ?",
-                           [session_key])
+            with session_scope() as db_session:
+                stmt = (
+                    update(SessionModel)
+                    .where(SessionModel.session_key == session_key)
+                    .values(buffer_count=SessionModel.buffer_count + 1)
+                )
+                db_session.execute(stmt)
 
     def get_session_buffer_count(self, session_key=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            buffer_count = db.select_single("SELECT buffer_count "
-                                                 "FROM sessions "
-                                                 "WHERE session_key = ?",
-                                                 [session_key])
-            if buffer_count:
-                return buffer_count['buffer_count']
+            with session_scope() as db_session:
+                stmt = (
+                    select(SessionModel.buffer_count)
+                    .where(SessionModel.session_key == session_key)
+                )
+                buffer_count = queries.fetch_scalar(db_session, stmt)
+            if buffer_count is not None:
+                return buffer_count
 
             return 0
 
     def set_session_buffer_trigger_time(self, session_key=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            db.action("UPDATE sessions SET buffer_last_triggered = EXTRACT(EPOCH FROM NOW())::int "
-                      "WHERE session_key = ?",
-                      [session_key])
+            with session_scope() as db_session:
+                stmt = (
+                    update(SessionModel)
+                    .where(SessionModel.session_key == session_key)
+                    .values(buffer_last_triggered=time_queries.epoch(func.now()))
+                )
+                db_session.execute(stmt)
 
     def get_session_buffer_trigger_time(self, session_key=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            last_time = db.select_single("SELECT buffer_last_triggered "
-                                              "FROM sessions "
-                                              "WHERE session_key = ?",
-                                              [session_key])
-            if last_time:
-                return last_time['buffer_last_triggered']
+            with session_scope() as db_session:
+                stmt = (
+                    select(SessionModel.buffer_last_triggered)
+                    .where(SessionModel.session_key == session_key)
+                )
+                last_time = queries.fetch_scalar(db_session, stmt)
+            if last_time is not None:
+                return last_time
 
             return None
 
     def set_temp_stopped(self):
-        db = database.MonitorDatabase()
         stopped_time = helpers.timestamp()
-        db.action("UPDATE sessions SET stopped = ?", [stopped_time])
+        with session_scope() as db_session:
+            stmt = update(SessionModel).values(stopped=stopped_time)
+            db_session.execute(stmt)
 
     def increment_write_attempts(self, session_key=None):
-        db = database.MonitorDatabase()
         if str(session_key).isdigit():
             session = self.get_session_by_key(session_key=session_key)
-            db.action("UPDATE sessions SET write_attempts = ? WHERE session_key = ?",
-                           [session['write_attempts'] + 1, session_key])
+            if not session:
+                return
+            with session_scope() as db_session:
+                stmt = (
+                    update(SessionModel)
+                    .where(SessionModel.session_key == session_key)
+                    .values(write_attempts=session['write_attempts'] + 1)
+                )
+                db_session.execute(stmt)
 
     def set_marker(self, session_key=None, marker_idx=None, marker_type=None):
-        db = database.MonitorDatabase()
         marker_args = [
             int(marker_type == 'intro'),
             int(marker_type == 'commercial'),
             int(marker_type == 'credits')
         ]
-        db.action("UPDATE sessions SET intro = ?, commercial = ?, credits = ?, marker = ? "
-                       "WHERE session_key = ?",
-                       marker_args + [marker_idx, session_key])
+        with session_scope() as db_session:
+            stmt = (
+                update(SessionModel)
+                .where(SessionModel.session_key == session_key)
+                .values(
+                    intro=marker_args[0],
+                    commercial=marker_args[1],
+                    credits=marker_args[2],
+                    marker=marker_idx,
+                )
+            )
+            db_session.execute(stmt)
 
     def set_watched(self, session_key=None):
-        db = database.MonitorDatabase()
-        db.action("UPDATE sessions SET watched = ? "
-                       "WHERE session_key = ?",
-                       [1, session_key])
+        with session_scope() as db_session:
+            stmt = (
+                update(SessionModel)
+                .where(SessionModel.session_key == session_key)
+                .values(watched=1)
+            )
+            db_session.execute(stmt)
 
     def write_continued_session(self, user_id=None, machine_id=None, media_type=None, stopped=None):
-        db = database.MonitorDatabase()
-        keys = {'user_id': user_id, 'machine_id': machine_id, 'media_type': media_type}
         values = {'stopped': stopped}
-        db.upsert(table_name='sessions_continued', key_dict=keys, value_dict=values)
+        with session_scope() as db_session:
+            stmt = (
+                update(SessionContinued)
+                .where(
+                    SessionContinued.user_id == user_id,
+                    SessionContinued.machine_id == machine_id,
+                    SessionContinued.media_type == media_type,
+                )
+                .values(**values)
+            )
+            result = db_session.execute(stmt)
+            if result.rowcount and result.rowcount > 0:
+                return
+
+            insert_values = {
+                'user_id': user_id,
+                'machine_id': machine_id,
+                'media_type': media_type,
+                'stopped': stopped,
+            }
+            db_session.execute(insert(SessionContinued).values(**insert_values))
 
     def is_initial_stream(self, user_id=None, machine_id=None, media_type=None, started=None):
-        db = database.MonitorDatabase()
-        last_session = db.select_single("SELECT stopped "
-                                             "FROM sessions_continued "
-                                             "WHERE user_id = ? AND machine_id = ? AND media_type = ? "
-                                             "ORDER BY stopped DESC",
-                                             [user_id, machine_id, media_type])
-        return int(started - last_session.get('stopped', 0) >= plexpy.CONFIG.NOTIFY_CONTINUED_SESSION_THRESHOLD)
+        with session_scope() as db_session:
+            stmt = (
+                select(SessionContinued.stopped)
+                .where(
+                    SessionContinued.user_id == user_id,
+                    SessionContinued.machine_id == machine_id,
+                    SessionContinued.media_type == media_type,
+                )
+                .order_by(SessionContinued.stopped.desc())
+            )
+            last_stopped = queries.fetch_scalar(db_session, stmt, default=0) or 0
+        return int(started - last_stopped >= plexpy.CONFIG.NOTIFY_CONTINUED_SESSION_THRESHOLD)
 
     def regroup_history(self):
         logger.info("Tautulli ActivityProcessor :: Creating database backup...")

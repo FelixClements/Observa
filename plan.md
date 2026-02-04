@@ -211,3 +211,38 @@ Phase 10: Linux-only runtime + de-vendor libs (Docker builds)
 - Keep client platform icons/mappings (Windows/macOS Plex clients) intact
 - Success criteria: platform-specific code removed without breaking UI mappings
 - Tests: app runs without vendored libs; pip deps install cleanly in Docker build
+
+Phase 11: ORM/Core migration (Postgres runtime, SQLite migration-only)
+- [ ] Establish a query layer for Core/ORM results:
+  - `plexpy/db/queries/__init__.py`
+  - helpers for consistent `mappings()` results, pagination, and error handling
+- [ ] Add Core time helpers for Postgres-only functions:
+  - `timezone`, `to_char`, `extract`, `epoch` utilities using `sqlalchemy.func`
+  - centralize in `plexpy/db/queries/time.py`
+- [ ] Convert low-risk CRUD to ORM/Core (remove `MonitorDatabase` usage):
+  - `plexpy/services/activity_processor.py`
+  - `plexpy/services/activity_pinger.py`
+  - `plexpy/services/notifiers.py`
+  - `plexpy/services/users.py` (simple reads/updates)
+- [ ] Convert reporting queries to SQLAlchemy Core (Postgres-specific allowed):
+  - `plexpy/services/graphs.py` (replace string-built SQL)
+  - `plexpy/services/users.py` LATERAL datatable stats
+  - `plexpy/services/libraries.py` LATERAL datatable stats
+  - `plexpy/services/notifiers.py` LATERAL last-notify lookup
+- [ ] Convert `plexpy/db/datafactory.py` stats queries to Core:
+  - use `lateral()` and Postgres `distinct on` (SQLAlchemy supports PG dialect)
+  - keep any remaining raw SQL isolated in `plexpy/db/queries/raw_pg.py`
+- [ ] Keep `plexpy/db/datatables.py` as raw SQL, but:
+  - tighten parameter binding and consolidate SQL construction utilities
+  - document that this module is intentionally raw SQL
+- [ ] Add/extend FK constraints and relationships where safe:
+  - session history <-> metadata/media_info, users, notifiers/newsletters
+  - add Alembic migrations for new constraints
+  - add preflight checks for orphans before enabling FKs
+- [ ] Ensure SQLite -> Postgres migration remains compatible:
+  - update `plexpy/db/migrate_sqlite.py` if new constraints require ordering or cleanup
+  - validate `Base.metadata.sorted_tables` order is still acyclic
+- [ ] Update docs to state: Postgres-only runtime, SQLite is migration-only
+  - `README.md`, `docs/architecture.md`, `plan.md`
+- [ ] Success criteria: >=80% of raw SQL in services moved to ORM/Core; remaining raw SQL isolated
+- [ ] Tests: parity checks for key stats queries; migration still completes on sample SQLite DB

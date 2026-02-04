@@ -19,11 +19,16 @@ from urllib.parse import parse_qsl
 
 import arrow
 import httpagentparser
+from sqlalchemy import case, delete, func, insert, select, text, update
 
 import plexpy
 from plexpy.app import common
 from plexpy.db import datatables
 from plexpy.db import cleanup
+from plexpy.db import queries
+from plexpy.db.engine import get_engine
+from plexpy.db.models import User, UserLogin
+from plexpy.db.session import session_scope
 from plexpy.services import libraries
 from plexpy.web import session
 from plexpy.db import database
@@ -373,21 +378,31 @@ class Users(object):
 
     def set_config(self, user_id=None, friendly_name='', custom_thumb='', do_notify=1, keep_history=1, allow_guest=1):
         if str(user_id).isdigit():
-            monitor_db = database.MonitorDatabase()
-
-            user = monitor_db.select_single('SELECT username FROM users WHERE user_id = ?', [user_id])
-            if user.get('username') == friendly_name:
-                friendly_name = None
-
-            key_dict = {'user_id': user_id}
-            value_dict = {'friendly_name': friendly_name,
-                          'custom_avatar_url': custom_thumb,
-                          'do_notify': do_notify,
-                          'keep_history': keep_history,
-                          'allow_guest': allow_guest
-                          }
             try:
-                monitor_db.upsert('users', value_dict, key_dict)
+                with session_scope() as db_session:
+                    stmt = select(User.username).where(User.user_id == user_id)
+                    username = queries.fetch_scalar(db_session, stmt)
+
+                    if username == friendly_name:
+                        friendly_name = None
+
+                    value_dict = {
+                        'friendly_name': friendly_name,
+                        'custom_avatar_url': custom_thumb,
+                        'do_notify': do_notify,
+                        'keep_history': keep_history,
+                        'allow_guest': allow_guest,
+                    }
+                    update_stmt = (
+                        update(User)
+                        .where(User.user_id == user_id)
+                        .values(**value_dict)
+                    )
+                    result = db_session.execute(update_stmt)
+                    if not (result.rowcount and result.rowcount > 0):
+                        insert_values = {'user_id': user_id}
+                        insert_values.update(value_dict)
+                        db_session.execute(insert(User).values(**insert_values))
             except Exception as e:
                 logger.warn("Tautulli Users :: Unable to execute database query for set_config: %s." % e)
 
@@ -702,17 +717,34 @@ class Users(object):
         return recently_watched
 
     def get_users(self, include_deleted=False):
-        monitor_db = database.MonitorDatabase()
-
-        where = '' if include_deleted else 'WHERE deleted_user = 0'
-
         try:
-            query = "SELECT id AS row_id, user_id, username, friendly_name, thumb, custom_avatar_url, email, " \
-                    "is_active, is_admin, is_home_user, is_allow_sync, is_restricted, " \
-                    "do_notify, keep_history, allow_guest, shared_libraries, " \
-                    "filter_all, filter_movies, filter_tv, filter_music, filter_photos " \
-                    "FROM users %s" % where
-            result = monitor_db.select(query=query)
+            with session_scope() as db_session:
+                stmt = select(
+                    User.id.label('row_id'),
+                    User.user_id,
+                    User.username,
+                    User.friendly_name,
+                    User.thumb,
+                    User.custom_avatar_url,
+                    User.email,
+                    User.is_active,
+                    User.is_admin,
+                    User.is_home_user,
+                    User.is_allow_sync,
+                    User.is_restricted,
+                    User.do_notify,
+                    User.keep_history,
+                    User.allow_guest,
+                    User.shared_libraries,
+                    User.filter_all,
+                    User.filter_movies,
+                    User.filter_tv,
+                    User.filter_music,
+                    User.filter_photos,
+                )
+                if not include_deleted:
+                    stmt = stmt.where(User.deleted_user == 0)
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for get_users: %s." % e)
             return []
@@ -747,14 +779,13 @@ class Users(object):
         return users
 
     def delete(self, user_id=None, row_ids=None, purge_only=False):
-        monitor_db = database.MonitorDatabase()
-
         if row_ids and row_ids is not None:
             row_ids = list(map(helpers.cast_to_int, row_ids.split(',')))
 
             # Get the user_ids corresponding to the row_ids
-            result = monitor_db.select("SELECT user_id FROM users "
-                                       "WHERE id IN ({})".format(",".join(["?"] * len(row_ids))), row_ids)
+            with session_scope() as db_session:
+                stmt = select(User.user_id).where(User.id.in_(row_ids))
+                result = queries.fetch_mappings(db_session, stmt)
 
             success = []
             for user in result:
@@ -771,9 +802,13 @@ class Users(object):
                 logger.info("Tautulli Users :: Deleting user with user_id %s from database."
                             % user_id)
                 try:
-                    monitor_db.action("UPDATE users "
-                                      "SET deleted_user = 1, keep_history = 0, do_notify = 0 "
-                                      "WHERE user_id = ?", [user_id])
+                    with session_scope() as db_session:
+                        stmt = (
+                            update(User)
+                            .where(User.user_id == user_id)
+                            .values(deleted_user=1, keep_history=0, do_notify=0)
+                        )
+                        db_session.execute(stmt)
                     return delete_success
                 except Exception as e:
                     logger.warn("Tautulli Users :: Unable to execute database query for delete: %s." % e)
@@ -782,31 +817,35 @@ class Users(object):
             return False
 
     def undelete(self, user_id=None, username=None):
-        monitor_db = database.MonitorDatabase()
-
         try:
             if user_id and str(user_id).isdigit():
-                query = "SELECT * FROM users WHERE user_id = ?"
-                result = monitor_db.select(query=query, args=[user_id])
-                if result:
-                    logger.info("Tautulli Users :: Re-adding user with id %s to database." % user_id)
-                    monitor_db.action("UPDATE users "
-                                      "SET deleted_user = 0, keep_history = 1, do_notify = 1 "
-                                      "WHERE user_id = ?", [user_id])
-                    return True
-                else:
+                with session_scope() as db_session:
+                    stmt = select(User.id).where(User.user_id == user_id)
+                    exists = queries.fetch_scalar(db_session, stmt)
+                    if exists is not None:
+                        logger.info("Tautulli Users :: Re-adding user with id %s to database." % user_id)
+                        update_stmt = (
+                            update(User)
+                            .where(User.user_id == user_id)
+                            .values(deleted_user=0, keep_history=1, do_notify=1)
+                        )
+                        db_session.execute(update_stmt)
+                        return True
                     return False
 
             elif username:
-                query = "SELECT * FROM users WHERE username = ?"
-                result = monitor_db.select(query=query, args=[username])
-                if result:
-                    logger.info("Tautulli Users :: Re-adding user with username %s to database." % username)
-                    monitor_db.action("UPDATE users "
-                                      "SET deleted_user = 0, keep_history = 1, do_notify = 1 "
-                                      "WHERE username = ?", [username])
-                    return True
-                else:
+                with session_scope() as db_session:
+                    stmt = select(User.id).where(User.username == username)
+                    exists = queries.fetch_scalar(db_session, stmt)
+                    if exists is not None:
+                        logger.info("Tautulli Users :: Re-adding user with username %s to database." % username)
+                        update_stmt = (
+                            update(User)
+                            .where(User.username == username)
+                            .values(deleted_user=0, keep_history=1, do_notify=1)
+                        )
+                        db_session.execute(update_stmt)
+                        return True
                     return False
 
         except Exception as e:
@@ -816,33 +855,29 @@ class Users(object):
     def get_user_id(self, user=None):
         if user:
             try:
-                monitor_db = database.MonitorDatabase()
-                query = "SELECT user_id FROM users WHERE username = ?"
-                result = monitor_db.select_single(query, args=[user])
-                if result:
-                    return result['user_id']
-                else:
-                    return None
-            except:
+                with session_scope() as db_session:
+                    stmt = select(User.user_id).where(User.username == user)
+                    return queries.fetch_scalar(db_session, stmt)
+            except Exception:
                 return None
 
         return None
 
     def get_user_names(self, kwargs=None):
-        monitor_db = database.MonitorDatabase()
-
-        user_cond = ''
-        if session.get_session_user_id():
-            user_cond = "AND user_id = %s " % session.get_session_user_id()
-
         try:
-            query = "SELECT user_id, " \
-                    "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
-                    THEN users.username ELSE users.friendly_name END) AS friendly_name " \
-                    "FROM users " \
-                    "WHERE deleted_user = 0 %s" % user_cond
-
-            result = monitor_db.select(query)
+            with session_scope() as db_session:
+                friendly_name_expr = case(
+                    (
+                        (User.friendly_name.is_(None)) | (func.trim(User.friendly_name) == ''),
+                        User.username,
+                    ),
+                    else_=User.friendly_name,
+                ).label('friendly_name')
+                stmt = select(User.user_id, friendly_name_expr).where(User.deleted_user == 0)
+                session_user_id = session.get_session_user_id()
+                if session_user_id:
+                    stmt = stmt.where(User.user_id == session_user_id)
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for get_user_names: %s." % e)
             return None
@@ -858,19 +893,20 @@ class Users(object):
 
         if user_id:
             try:
-                monitor_db = database.MonitorDatabase()
-                query = "SELECT allow_guest, user_token, server_token FROM users " \
-                        "WHERE user_id = ? AND deleted_user = 0"
-                result = monitor_db.select_single(query, args=[user_id])
+                with session_scope() as db_session:
+                    stmt = (
+                        select(User.allow_guest, User.user_token, User.server_token)
+                        .where(User.user_id == user_id, User.deleted_user == 0)
+                    )
+                    result = queries.fetch_mapping(db_session, stmt, default={})
                 if result:
-                    tokens = {'allow_guest': result['allow_guest'],
-                              'user_token': result['user_token'],
-                              'server_token': result['server_token']
-                              }
-                    return tokens
-                else:
-                    return tokens
-            except:
+                    tokens = {
+                        'allow_guest': result.get('allow_guest'),
+                        'user_token': result.get('user_token'),
+                        'server_token': result.get('server_token'),
+                    }
+                return tokens
+            except Exception:
                 return tokens
 
         return tokens
@@ -880,10 +916,15 @@ class Users(object):
             return {}
 
         try:
-            monitor_db = database.MonitorDatabase()
-            query = "SELECT filter_all, filter_movies, filter_tv, filter_music, filter_photos FROM users " \
-                    "WHERE user_id = ?"
-            result = monitor_db.select_single(query, args=[user_id])
+            with session_scope() as db_session:
+                stmt = select(
+                    User.filter_all,
+                    User.filter_movies,
+                    User.filter_tv,
+                    User.filter_music,
+                    User.filter_photos,
+                ).where(User.user_id == user_id)
+                result = queries.fetch_mapping(db_session, stmt, default={})
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for get_filters: %s." % e)
             result = {}
@@ -907,44 +948,43 @@ class Users(object):
                        user_agent=None, success=0, expiry=None, jwt_token=None):
 
         if user_id is None or str(user_id).isdigit():
-            monitor_db = database.MonitorDatabase()
-
             if expiry is not None:
                 expiry = helpers.datetime_to_iso(expiry)
 
-            keys = {'timestamp': helpers.timestamp(),
-                    'user_id': user_id}
-
-            values = {'user': user,
-                      'user_group': user_group,
-                      'ip_address': ip_address,
-                      'host': host,
-                      'user_agent': user_agent,
-                      'success': success,
-                      'expiry': expiry,
-                      'jwt_token': jwt_token}
-
             try:
-                monitor_db.upsert(table_name='user_login', key_dict=keys, value_dict=values)
+                values = {
+                    'timestamp': helpers.timestamp(),
+                    'user_id': user_id,
+                    'user': user,
+                    'user_group': user_group,
+                    'ip_address': ip_address,
+                    'host': host,
+                    'user_agent': user_agent,
+                    'success': success,
+                    'expiry': expiry,
+                    'jwt_token': jwt_token,
+                }
+                with session_scope() as db_session:
+                    db_session.execute(insert(UserLogin).values(**values))
             except Exception as e:
                 logger.warn("Tautulli Users :: Unable to execute database query for set_login_log: %s." % e)
 
     def get_user_login(self, jwt_token):
-        monitor_db = database.MonitorDatabase()
-        result = monitor_db.select_single("SELECT * FROM user_login "
-                                          "WHERE jwt_token = ?",
-                                          [jwt_token])
-        return result
+        try:
+            with session_scope() as db_session:
+                stmt = select(UserLogin.__table__).where(UserLogin.jwt_token == jwt_token)
+                return queries.fetch_mapping(db_session, stmt, default={})
+        except Exception as e:
+            logger.warn("Tautulli Users :: Unable to execute database query for get_user_login: %s." % e)
+            return {}
 
     def clear_user_login_token(self, jwt_token=None, row_ids=None):
-        monitor_db = database.MonitorDatabase()
-
         if jwt_token:
             logger.debug("Tautulli Users :: Clearing user JWT token.")
             try:
-                monitor_db.action("UPDATE user_login SET jwt_token = NULL "
-                                  "WHERE jwt_token = ?",
-                                  [jwt_token])
+                with session_scope() as db_session:
+                    stmt = update(UserLogin).where(UserLogin.jwt_token == jwt_token).values(jwt_token=None)
+                    db_session.execute(stmt)
             except Exception as e:
                 logger.error("Tautulli Users :: Unable to clear user JWT token: %s.", e)
                 return False
@@ -953,9 +993,11 @@ class Users(object):
             row_ids = list(map(helpers.cast_to_int, row_ids.split(',')))
             logger.debug("Tautulli Users :: Clearing JWT tokens for row_ids %s.", row_ids)
             try:
-                monitor_db.action("UPDATE user_login SET jwt_token = NULL "
-                                  "WHERE id in ({})".format(",".join(["?"] * len(row_ids))),
-                                  row_ids)
+                if not row_ids:
+                    return True
+                with session_scope() as db_session:
+                    stmt = update(UserLogin).where(UserLogin.id.in_(row_ids)).values(jwt_token=None)
+                    db_session.execute(stmt)
             except Exception as e:
                 logger.error("Tautulli Users :: Unable to clear JWT tokens: %s.", e)
                 return False
@@ -1046,12 +1088,14 @@ class Users(object):
         return dict
 
     def delete_login_log(self):
-        monitor_db = database.MonitorDatabase()
-
         try:
             logger.info("Tautulli Users :: Clearing login logs from database.")
-            monitor_db.action('DELETE FROM user_login')
-            monitor_db.action('VACUUM')
+            with session_scope() as db_session:
+                db_session.execute(delete(UserLogin))
+
+            engine = get_engine()
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+                connection.execute(text('VACUUM'))
             return True
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for delete_login_log: %s." % e)
