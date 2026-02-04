@@ -55,7 +55,7 @@ from plexpy.integrations import pmsconnect
 from plexpy.services import mobile_app
 from plexpy.services import users
 from plexpy.util import request
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import database
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -504,11 +504,16 @@ def get_notifiers(notifier_id=None, notify_action=None):
     result = db.select(
         (
             "SELECT notifiers.id, notifiers.agent_id, notifiers.agent_name, notifiers.agent_label, notifiers.friendly_name, %s, "
-            "MAX(notify_log.timestamp) AS last_triggered, notify_log.success AS last_success "
+            "last_notify_log.last_triggered, last_notify_log.last_success "
             "FROM notifiers "
-            "LEFT OUTER JOIN notify_log ON notifiers.id = notify_log.notifier_id "
-            "%s "
-            "GROUP BY notifiers.id"
+            "LEFT JOIN LATERAL ("
+            "SELECT notify_log.timestamp AS last_triggered, notify_log.success AS last_success "
+            "FROM notify_log "
+            "WHERE notify_log.notifier_id = notifiers.id "
+            "ORDER BY notify_log.timestamp DESC, notify_log.id DESC "
+            "LIMIT 1"
+            ") AS last_notify_log ON TRUE "
+            "%s"
         ) % (', '.join(notify_actions), where), args=args
     )
 

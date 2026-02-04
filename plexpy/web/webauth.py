@@ -26,9 +26,12 @@ from urllib.parse import quote, unquote
 import cherrypy
 from hashing_passwords import check_hash
 import jwt
+from sqlalchemy import select
 
 import plexpy
-from plexpy.db.sqlite_legacy import MonitorDatabase
+from plexpy.db.database import MonitorDatabase
+from plexpy.db.models import User
+from plexpy.db.session import session_scope
 from plexpy.integrations.plextv import PlexTV
 from plexpy.services.users import Users, refresh_users
 from plexpy.util import logger
@@ -86,22 +89,22 @@ def plex_user_login(token=None, headers=None):
         if server_token:
 
             # Register the new user / update the access tokens.
-            monitor_db = MonitorDatabase()
             try:
                 logger.debug("Tautulli WebAuth :: Registering token for user '%s' in the database."
                              % user_details['username'])
-                result = monitor_db.action("UPDATE users SET server_token = ? WHERE user_id = ?",
-                                           [server_token, user_details['user_id']])
+                with session_scope() as session:
+                    stmt = select(User).where(User.user_id == user_details['user_id'])
+                    user = session.execute(stmt).scalar_one_or_none()
+                    if user is None:
+                        logger.warn("Tautulli WebAuth :: Unable to register user '%s' in database."
+                                    % user_details['username'])
+                        return None
+                    user.server_token = server_token
 
-                if result:
-                    # Refresh the users list to make sure we have all the correct permissions.
-                    refresh_users()
-                    # Successful login
-                    return user_details, 'guest'
-                else:
-                    logger.warn("Tautulli WebAuth :: Unable to register user '%s' in database."
-                                % user_details['username'])
-                    return None
+                # Refresh the users list to make sure we have all the correct permissions.
+                refresh_users()
+                # Successful login
+                return user_details, 'guest'
             except Exception as e:
                 logger.warn("Tautulli WebAuth :: Unable to register user '%s' in database: %s."
                             % (user_details['username'], e))

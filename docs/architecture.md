@@ -12,7 +12,10 @@ without changing runtime behavior.
 - `plexpy/config/`
   - `core.py`: configuration model and persistence.
 - `plexpy/db/`
-  - `sqlite_legacy.py`: legacy SQLite implementation (temporary).
+  - `engine.py`: Postgres engine configuration and pooling.
+  - `session.py`: SQLAlchemy session factory helpers.
+  - `models/`: ORM model definitions.
+  - `repository/`: query and data-access helpers.
 - `plexpy/web/`
   - `webserve.py`: web UI and API handlers.
   - `webstart.py`: CherryPy server wiring.

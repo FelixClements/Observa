@@ -1,3 +1,4 @@
+# AGENTS.md
 ---
 name: build
 description: Super engineer with strong documentation skills

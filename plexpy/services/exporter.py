@@ -27,10 +27,13 @@ from io import open
 from multiprocessing.dummy import Pool as ThreadPool
 
 import plexpy
+from sqlalchemy import delete, select, update
+
 from plexpy.db import datatables
-from plexpy.services import users
-from plexpy.db import sqlite_legacy as database
+from plexpy.db.models import Export as ExportModel
+from plexpy.db.session import session_scope
 from plexpy.integrations.plex import Plex
+from plexpy.services import users
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -1930,10 +1933,24 @@ class Export(object):
             'individual_files': self.individual_files
         }
 
-        db = database.MonitorDatabase()
         try:
-            db.upsert(table_name='exports', key_dict=keys, value_dict=values)
-            return db.last_insert_id()
+            with session_scope() as session:
+                stmt = select(ExportModel).where(
+                    ExportModel.timestamp == keys['timestamp'],
+                    ExportModel.section_id == keys['section_id'],
+                    ExportModel.user_id == keys['user_id'],
+                    ExportModel.rating_key == keys['rating_key'],
+                    ExportModel.media_type == keys['media_type'],
+                )
+                export = session.execute(stmt).scalar_one_or_none()
+                if export is None:
+                    export = ExportModel(**keys, **values)
+                    session.add(export)
+                else:
+                    for key, value in values.items():
+                        setattr(export, key, value)
+                session.flush()
+                return export.id
         except Exception as e:
             logger.error("Tautulli Exporter :: Unable to save export to database: %s", e)
             return False
@@ -1955,8 +1972,12 @@ class Export(object):
             'file_size': self.file_size
         }
 
-        db = database.MonitorDatabase()
-        db.upsert(table_name='exports', key_dict=keys, value_dict=values)
+        with session_scope() as session:
+            export = session.get(ExportModel, self.export_id)
+            if export is None:
+                return
+            for key, value in values.items():
+                setattr(export, key, value)
 
     def set_export_progress(self):
         keys = {
@@ -1967,8 +1988,12 @@ class Export(object):
             'exported_items': self.exported_items
         }
 
-        db = database.MonitorDatabase()
-        db.upsert(table_name='exports', key_dict=keys, value_dict=values)
+        with session_scope() as session:
+            export = session.get(ExportModel, self.export_id)
+            if export is None:
+                return
+            for key, value in values.items():
+                setattr(export, key, value)
 
     def _real_export(self):
         logger.info("Tautulli Exporter :: Starting export for '%s'...", self.title)
@@ -2390,19 +2415,30 @@ class ExportObject(Export):
 
 
 def get_export(export_id):
-    db = database.MonitorDatabase()
-    result = db.select_single("SELECT timestamp, title, file_format, thumb_level, art_level, logo_level, "
-                              "individual_files, complete "
-                              "FROM exports WHERE id = ?",
-                              [export_id])
+    if not str(export_id).isdigit():
+        return None
 
-    if result:
-        if result['individual_files']:
-            result['filename'] = None
-            result['exists'] = check_export_exists(result['title'], result['timestamp'])
-        else:
-            result['filename'] = '{}.{}'.format(result['title'], result['file_format'])
-            result['exists'] = check_export_exists(result['title'], result['timestamp'], result['filename'])
+    with session_scope() as session:
+        export = session.get(ExportModel, int(export_id))
+        if export is None:
+            return None
+        result = {
+            'timestamp': export.timestamp,
+            'title': export.title,
+            'file_format': export.file_format,
+            'thumb_level': export.thumb_level,
+            'art_level': export.art_level,
+            'logo_level': export.logo_level,
+            'individual_files': export.individual_files,
+            'complete': export.complete,
+        }
+
+    if result['individual_files']:
+        result['filename'] = None
+        result['exists'] = check_export_exists(result['title'], result['timestamp'])
+    else:
+        result['filename'] = '{}.{}'.format(result['title'], result['file_format'])
+        result['exists'] = check_export_exists(result['title'], result['timestamp'], result['filename'])
 
     return result
 
@@ -2423,8 +2459,10 @@ def delete_export(export_id):
 
         if deleted:
             logger.info("Tautulli Exporter :: Deleting export_id %s from the database.", export_id)
-            db = database.MonitorDatabase()
-            result = db.action("DELETE FROM exports WHERE id = ?", args=[export_id])
+            with session_scope() as session:
+                export = session.get(ExportModel, int(export_id))
+                if export is not None:
+                    session.delete(export)
 
         return deleted
     else:
@@ -2443,13 +2481,18 @@ def delete_all_exports():
     if not os.path.exists(export_dir):
         os.makedirs(export_dir)
 
-    database.delete_exports()
+    with session_scope() as session:
+        session.execute(delete(ExportModel))
     return True
 
 
 def cancel_exports():
-    db = database.MonitorDatabase()
-    db.action("UPDATE exports SET complete = -1 WHERE complete = 0")
+    with session_scope() as session:
+        session.execute(
+            update(ExportModel)
+            .where(ExportModel.complete == 0)
+            .values(complete=-1)
+        )
 
 
 def get_export_datatable(section_id=None, user_id=None, rating_key=None, kwargs=None):

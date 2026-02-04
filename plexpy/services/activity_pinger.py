@@ -17,7 +17,7 @@ import threading
 
 import plexpy
 from plexpy.integrations import pmsconnect
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import database
 from plexpy.integrations import plextv
 from plexpy.services import activity_handler
 from plexpy.services import activity_processor
@@ -109,10 +109,12 @@ def check_active_sessions(ws_request=False):
                                         logger.info("Tautulli Monitor :: User '%s' has triggered a buffer warning."
                                                     % stream['user'])
                                         # Set the buffer trigger time
-                                        monitor_db.action("UPDATE sessions "
-                                                          "SET buffer_last_triggered = strftime('%s', 'now') "
-                                                          "WHERE session_key = ? AND rating_key = ?",
-                                                          [stream['session_key'], stream['rating_key']])
+                                        monitor_db.action(
+                                            "UPDATE sessions "
+                                            "SET buffer_last_triggered = EXTRACT(EPOCH FROM NOW())::int "
+                                            "WHERE session_key = ? AND rating_key = ?",
+                                            [stream['session_key'], stream['rating_key']],
+                                        )
 
                                         plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_buffer'})
 
@@ -123,10 +125,12 @@ def check_active_sessions(ws_request=False):
                                             logger.info("Tautulli Monitor :: User '%s' has triggered multiple buffer warnings."
                                                     % stream['user'])
                                             # Set the buffer trigger time
-                                            monitor_db.action("UPDATE sessions "
-                                                              "SET buffer_last_triggered = strftime('%s', 'now') "
-                                                              "WHERE session_key = ? AND rating_key = ?",
-                                                              [stream['session_key'], stream['rating_key']])
+                                            monitor_db.action(
+                                                "UPDATE sessions "
+                                                "SET buffer_last_triggered = EXTRACT(EPOCH FROM NOW())::int "
+                                                "WHERE session_key = ? AND rating_key = ?",
+                                                [stream['session_key'], stream['rating_key']],
+                                            )
 
                                             plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_buffer'})
 

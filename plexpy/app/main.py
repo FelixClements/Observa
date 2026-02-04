@@ -41,7 +41,6 @@ import plexpy
 from plexpy.app import bootstrap as _bootstrap
 from plexpy.app import common
 from plexpy.config import core as config
-from plexpy.db import sqlite_legacy as database
 from plexpy.util import helpers
 from plexpy.util import logger
 from plexpy.web import webstart
@@ -80,7 +79,6 @@ def _sync_bootstrap_globals():
         'FROZEN',
         'DEV',
         'DATA_DIR',
-        'DB_FILE',
     ):
         setattr(_bootstrap, key, getattr(plexpy, key))
 
@@ -284,17 +282,6 @@ def main():
             os.remove(test_file)
         except OSError:
             pass
-
-    # Put the database in the DATA_DIR
-    plexpy.DB_FILE = os.path.join(plexpy.DATA_DIR, database.FILENAME)
-
-    # Move 'plexpy.db' to 'tautulli.db'
-    if os.path.isfile(os.path.join(plexpy.DATA_DIR, 'plexpy.db')) and \
-            not os.path.isfile(os.path.join(plexpy.DATA_DIR, plexpy.DB_FILE)):
-        try:
-            os.rename(os.path.join(plexpy.DATA_DIR, 'plexpy.db'), plexpy.DB_FILE)
-        except OSError as e:
-            raise SystemExit("Unable to rename plexpy.db to tautulli.db: %s", e)
 
     if args.migrate_db:
         from plexpy.db.migrations import manager as migration_manager

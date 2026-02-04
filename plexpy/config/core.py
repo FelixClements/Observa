@@ -107,7 +107,6 @@ _CONFIG_DEFINITIONS = {
     'EXPORT_DIR': (str, 'General', ''),
     'EXPORT_THREADS': (int, 'Advanced', 8),
     'FIRST_RUN_COMPLETE': (int, 'General', 0),
-    'FREEZE_DB': (int, 'General', 0),
     'GET_FILE_SIZES': (int, 'General', 0),
     'GET_FILE_SIZES_HOLD': (dict, 'General', {'section_ids': [], 'rating_keys': []}),
     'GIT_BRANCH': (str, 'General', 'master'),
@@ -148,7 +147,6 @@ _CONFIG_DEFINITIONS = {
     'HTTP_THREAD_POOL': (int, 'General', 10),
     'INTERFACE': (str, 'General', 'default'),
     'IMGUR_CLIENT_ID': (str, 'Monitoring', ''),
-    'JOURNAL_MODE': (str, 'Advanced', 'WAL'),
     'LAUNCH_BROWSER': (int, 'General', 1),
     'LAUNCH_STARTUP': (int, 'General', 1),
     'LOG_BLACKLIST': (int, 'General', 1),
@@ -193,7 +191,6 @@ _CONFIG_DEFINITIONS = {
     'REFRESH_USERS_ON_STARTUP': (int, 'Monitoring', 1),
     'SESSION_DB_WRITE_ATTEMPTS': (int, 'Advanced', 5),
     'SHOW_ADVANCED_SETTINGS': (int, 'General', 0),
-    'SYNCHRONOUS_MODE': (str, 'Advanced', 'NORMAL'),
     'THEMOVIEDB_APIKEY': (str, 'General', 'e9a6655bae34bf694a0f3e33338dc28e'),
     'THEMOVIEDB_LOOKUP': (int, 'General', 0),
     'TVMAZE_LOOKUP': (int, 'General', 0),
@@ -736,3 +733,14 @@ class Config(object):
                 self.ANON_REDIRECT_DYNAMIC = 1
 
             self.CONFIG_VERSION = 22
+
+        if self.CONFIG_VERSION == 22:
+            for section, key in (
+                ('Advanced', 'journal_mode'),
+                ('Advanced', 'synchronous_mode'),
+                ('General', 'freeze_db'),
+            ):
+                if section in self._config and key in self._config[section]:
+                    self._config[section].pop(key, None)
+
+            self.CONFIG_VERSION = 23

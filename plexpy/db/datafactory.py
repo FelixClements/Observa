@@ -23,7 +23,7 @@ from plexpy.db import datatables
 from plexpy.integrations import pmsconnect
 from plexpy.services import users
 from plexpy.web import session
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import database
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -48,6 +48,25 @@ class DataFactory(object):
 
         if custom_where is None:
             custom_where = []
+
+        custom_where_sql = []
+        custom_where_union = []
+        for clause, value in custom_where:
+            if clause == 'media_type_live':
+                custom_where_sql.append([
+                    "(CASE WHEN session_history_metadata.live = 1 THEN 'live' "
+                    "ELSE session_history.media_type END)",
+                    value,
+                ])
+                custom_where_union.append([
+                    "(CASE WHEN live = 1 THEN 'live' ELSE media_type END)",
+                    value,
+                ])
+            else:
+                custom_where_sql.append([clause, value])
+                custom_where_union.append([clause.split('.')[-1], value])
+
+        custom_where = custom_where_sql
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
@@ -75,58 +94,58 @@ class DataFactory(object):
 
         columns = [
             "session_history.reference_id",
-            "session_history.id AS row_id",
+            "MAX(session_history.id) AS row_id",
             "MAX(started) AS date",
             "MIN(started) AS started",
             "MAX(stopped) AS stopped",
             "SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE 0 END) - \
              SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration",
             "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter",
-            "session_history.view_offset",
-            "session_history.user_id",
-            "session_history.user",
-            "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
-             THEN users.username ELSE users.friendly_name END) AS friendly_name",
-            "users.thumb AS user_thumb",
-            "users.custom_avatar_url AS custom_thumb",
-            "platform",
-            "product",
-            "player",
-            "ip_address",
-            "machine_id",
-            "location",
-            "secure",
-            "relayed",
-            "session_history.media_type",
-            "(CASE WHEN session_history_metadata.live = 1 THEN 'live' ELSE session_history.media_type END) \
+            "MAX(session_history.view_offset) AS view_offset",
+            "MAX(session_history.user_id) AS user_id",
+            "MAX(session_history.user) AS user",
+            "MAX((CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
+             THEN users.username ELSE users.friendly_name END)) AS friendly_name",
+            "MAX(users.thumb) AS user_thumb",
+            "MAX(users.custom_avatar_url) AS custom_thumb",
+            "MAX(session_history.platform) AS platform",
+            "MAX(session_history.product) AS product",
+            "MAX(session_history.player) AS player",
+            "MAX(session_history.ip_address) AS ip_address",
+            "MAX(session_history.machine_id) AS machine_id",
+            "MAX(session_history.location) AS location",
+            "MAX(session_history.secure) AS secure",
+            "MAX(session_history.relayed) AS relayed",
+            "MAX(session_history.media_type) AS media_type",
+            "MAX((CASE WHEN session_history_metadata.live = 1 THEN 'live' ELSE session_history.media_type END)) \
              AS media_type_live",
-            "session_history_metadata.rating_key",
-            "session_history_metadata.parent_rating_key",
-            "session_history_metadata.grandparent_rating_key",
-            "session_history_metadata.full_title",
-            "session_history_metadata.title",
-            "session_history_metadata.parent_title",
-            "session_history_metadata.grandparent_title",
-            "session_history_metadata.original_title",
-            "session_history_metadata.year",
-            "session_history_metadata.media_index",
-            "session_history_metadata.parent_media_index",
-            "session_history_metadata.thumb",
-            "session_history_metadata.parent_thumb",
-            "session_history_metadata.grandparent_thumb",
-            "session_history_metadata.live",
-            "session_history_metadata.added_at",
-            "session_history_metadata.originally_available_at",
-            "session_history_metadata.guid",
-            "MAX((CASE WHEN (view_offset IS NULL OR view_offset = '') THEN 0.1 ELSE view_offset * 1.0 END) / \
-             (CASE WHEN (session_history_metadata.duration IS NULL OR session_history_metadata.duration = '') \
+            "MAX(session_history_metadata.rating_key) AS rating_key",
+            "MAX(session_history_metadata.parent_rating_key) AS parent_rating_key",
+            "MAX(session_history_metadata.grandparent_rating_key) AS grandparent_rating_key",
+            "MAX(session_history_metadata.full_title) AS full_title",
+            "MAX(session_history_metadata.title) AS title",
+            "MAX(session_history_metadata.parent_title) AS parent_title",
+            "MAX(session_history_metadata.grandparent_title) AS grandparent_title",
+            "MAX(session_history_metadata.original_title) AS original_title",
+            "MAX(session_history_metadata.year) AS year",
+            "MAX(session_history_metadata.media_index) AS media_index",
+            "MAX(session_history_metadata.parent_media_index) AS parent_media_index",
+            "MAX(session_history_metadata.thumb) AS thumb",
+            "MAX(session_history_metadata.parent_thumb) AS parent_thumb",
+            "MAX(session_history_metadata.grandparent_thumb) AS grandparent_thumb",
+            "MAX(session_history_metadata.live) AS live",
+            "MAX(session_history_metadata.added_at) AS added_at",
+            "MAX(session_history_metadata.originally_available_at) AS originally_available_at",
+            "MAX(session_history_metadata.guid) AS guid",
+            "MAX((CASE WHEN session_history.view_offset IS NULL THEN 0.1 ELSE session_history.view_offset * 1.0 END) / \
+             (CASE WHEN session_history_metadata.duration IS NULL \
              THEN 1.0 ELSE session_history_metadata.duration * 1.0 END) * 100) AS percent_complete",
-            "session_history_metadata.duration",
-            "session_history_metadata.marker_credits_first",
-            "session_history_metadata.marker_credits_final",
-            "session_history_media_info.transcode_decision",
+            "MAX(session_history_metadata.duration) AS duration",
+            "MAX(session_history_metadata.marker_credits_first) AS marker_credits_first",
+            "MAX(session_history_metadata.marker_credits_final) AS marker_credits_final",
+            "MAX(session_history_media_info.transcode_decision) AS transcode_decision",
             "COUNT(*) AS group_count",
-            "GROUP_CONCAT(session_history.id) AS group_ids",
+            "string_agg(session_history.id::text, ',') AS group_ids",
             "NULL AS state",
             "NULL AS session_key"
             ]
@@ -134,63 +153,63 @@ class DataFactory(object):
         if include_activity:
             table_name_union = 'sessions'
             # Very hacky way to match the custom where parameters for the unioned table
-            custom_where_union = [[c[0].split('.')[-1], c[1]] for c in custom_where]
+            # (re-built above for media_type_live compatibility)
             group_by_union = ['session_key']
 
             columns_union = [
                 "NULL AS reference_id",
                 "NULL AS row_id",
-                "started AS date",
-                "started",
-                "stopped",
-                "SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (strftime('%s', 'now') - started) END) - \
+                "MAX(started) AS date",
+                "MAX(started) AS started",
+                "MAX(stopped) AS stopped",
+                "SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (EXTRACT(EPOCH FROM NOW())::int - started) END) - \
                  SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration",
                 "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter",
-                "view_offset",
-                "user_id",
-                "user",
-                "(CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' \
-                 THEN user ELSE friendly_name END) AS friendly_name",
+                "MAX(view_offset) AS view_offset",
+                "MAX(user_id) AS user_id",
+                "MAX(user) AS user",
+                "MAX((CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' \
+                 THEN user ELSE friendly_name END)) AS friendly_name",
                 "NULL AS user_thumb",
                 "NULL AS custom_thumb",
-                "platform",
-                "product",
-                "player",
-                "ip_address",
-                "machine_id",
-                "location",
-                "secure",
-                "relayed",
-                "media_type",
-                "(CASE WHEN live = 1 THEN 'live' ELSE media_type END) AS media_type_live",
-                "rating_key",
-                "parent_rating_key",
-                "grandparent_rating_key",
-                "full_title",
-                "title",
-                "parent_title",
-                "grandparent_title",
-                "original_title",
-                "year",
-                "media_index",
-                "parent_media_index",
-                "thumb",
-                "parent_thumb",
-                "grandparent_thumb",
-                "live",
-                "added_at",
-                "originally_available_at",
-                "guid",
-                "MAX((CASE WHEN (view_offset IS NULL OR view_offset = '') THEN 0.1 ELSE view_offset * 1.0 END) / \
-                 (CASE WHEN (duration IS NULL OR duration = '') \
+                "MAX(platform) AS platform",
+                "MAX(product) AS product",
+                "MAX(player) AS player",
+                "MAX(ip_address) AS ip_address",
+                "MAX(machine_id) AS machine_id",
+                "MAX(location) AS location",
+                "MAX(secure) AS secure",
+                "MAX(relayed) AS relayed",
+                "MAX(media_type) AS media_type",
+                "MAX((CASE WHEN live = 1 THEN 'live' ELSE media_type END)) AS media_type_live",
+                "MAX(rating_key) AS rating_key",
+                "MAX(parent_rating_key) AS parent_rating_key",
+                "MAX(grandparent_rating_key) AS grandparent_rating_key",
+                "MAX(full_title) AS full_title",
+                "MAX(title) AS title",
+                "MAX(parent_title) AS parent_title",
+                "MAX(grandparent_title) AS grandparent_title",
+                "MAX(original_title) AS original_title",
+                "MAX(year) AS year",
+                "MAX(media_index) AS media_index",
+                "MAX(parent_media_index) AS parent_media_index",
+                "MAX(thumb) AS thumb",
+                "MAX(parent_thumb) AS parent_thumb",
+                "MAX(grandparent_thumb) AS grandparent_thumb",
+                "MAX(live) AS live",
+                "MAX(added_at) AS added_at",
+                "MAX(originally_available_at) AS originally_available_at",
+                "MAX(guid) AS guid",
+                "MAX((CASE WHEN view_offset IS NULL THEN 0.1 ELSE view_offset * 1.0 END) / \
+                 (CASE WHEN duration IS NULL \
                  THEN 1.0 ELSE duration * 1.0 END) * 100) AS percent_complete",
-                "duration",
+                "MAX(duration) AS duration",
                 "NULL AS marker_credits_first",
                 "NULL AS marker_credits_final",
-                "transcode_decision",
+                "MAX(transcode_decision) AS transcode_decision",
                 "NULL AS group_count",
                 "NULL AS group_ids",
-                "state",
+                "MAX(state) AS state",
                 "session_key"
                 ]
 
@@ -365,12 +384,16 @@ class DataFactory(object):
 
         where_timeframe = ''
         if before:
-            where_timeframe += "AND strftime('%%Y-%%m-%%d', datetime(started, 'unixepoch', 'localtime')) <= '%s' " % before
+            where_timeframe += (
+                "AND to_char(to_timestamp(started), 'YYYY-MM-DD') <= '%s' " % before
+            )
             if not after:
                 timestamp = helpers.YMD_to_timestamp(before) - time_range * 24 * 60 * 60
                 where_timeframe += "AND session_history.stopped >= %s " % timestamp
         if after:
-            where_timeframe += "AND strftime('%%Y-%%m-%%d', datetime(started, 'unixepoch', 'localtime')) >= '%s' " % after
+            where_timeframe += (
+                "AND to_char(to_timestamp(started), 'YYYY-MM-DD') >= '%s' " % after
+            )
             if not before:
                 timestamp = helpers.YMD_to_timestamp(after) + time_range * 24 * 60 * 60
                 where_timeframe += "AND session_history.stopped <= %s " % timestamp
@@ -384,7 +407,15 @@ class DataFactory(object):
         if user_id:
             where_id += 'AND session_history.user_id = %s ' % user_id
 
-        group_by = 'session_history.reference_id' if grouping else 'session_history.id'
+        group_key = (
+            'COALESCE(session_history.reference_id, session_history.id)'
+            if grouping else 'session_history.id'
+        )
+        duration_expr = (
+            "(CASE WHEN session_history.stopped > 0 THEN (session_history.stopped - session_history.started) - "
+            "(CASE WHEN session_history.paused_counter IS NULL THEN 0 ELSE session_history.paused_counter END) "
+            "ELSE 0 END)"
+        )
         sort_type = 'total_duration' if stats_type == 'duration' else 'total_plays'
 
         home_stats = []
@@ -393,19 +424,21 @@ class DataFactory(object):
             if stat == 'top_movies':
                 top_movies = []
                 try:
-                    query = "SELECT sh.id, shm.full_title, shm.year, sh.rating_key, shm.thumb, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, sh.started, shm.live, shm.guid, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) AS total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE session_history.media_type = 'movie' %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
+                    query = "SELECT MAX(session_history.id) AS id, shm.full_title, shm.year, " \
+                            "MAX(session_history.rating_key) AS rating_key, MAX(shm.thumb) AS thumb, " \
+                            "MAX(session_history.section_id) AS section_id, MAX(shm.art) AS art, " \
+                            "MAX(session_history.media_type) AS media_type, MAX(shm.content_rating) AS content_rating, " \
+                            "MAX(shm.labels) AS labels, MAX(session_history.started) AS started, " \
+                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "WHERE session_history.media_type = 'movie' %s %s " \
                             "GROUP BY shm.full_title, shm.year " \
-                            "ORDER BY %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe, where_id, group_by, sort_type, stats_count, stats_start)
+                            "ORDER BY %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_movies: %s." % e)
@@ -444,20 +477,22 @@ class DataFactory(object):
             elif stat == 'popular_movies':
                 popular_movies = []
                 try:
-                    query = "SELECT sh.id, shm.full_title, shm.year, sh.rating_key, shm.thumb, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, sh.started, shm.live, shm.guid, " \
-                            "COUNT(DISTINCT sh.user_id) AS users_watched, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) as total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE session_history.media_type = 'movie' %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
+                    query = "SELECT MAX(session_history.id) AS id, shm.full_title, shm.year, " \
+                            "MAX(session_history.rating_key) AS rating_key, MAX(shm.thumb) AS thumb, " \
+                            "MAX(session_history.section_id) AS section_id, MAX(shm.art) AS art, " \
+                            "MAX(session_history.media_type) AS media_type, MAX(shm.content_rating) AS content_rating, " \
+                            "MAX(shm.labels) AS labels, MAX(session_history.started) AS started, " \
+                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "COUNT(DISTINCT session_history.user_id) AS users_watched, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "WHERE session_history.media_type = 'movie' %s %s " \
                             "GROUP BY shm.full_title, shm.year " \
-                            "ORDER BY users_watched DESC, %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe, where_id, group_by, sort_type, stats_count, stats_start)
+                            "ORDER BY users_watched DESC, %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_movies: %s." % e)
@@ -494,21 +529,23 @@ class DataFactory(object):
             elif stat == 'top_tv':
                 top_tv = []
                 try:
-                    query = "SELECT sh.id, shm.grandparent_title, sh.grandparent_rating_key, " \
-                            "shm.grandparent_thumb, sh.section_id, " \
-                            "shm.year, sh.rating_key, shm.art, sh.media_type, " \
-                            "shm.content_rating, shm.labels, sh.started, shm.live, shm.guid, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) AS total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE session_history.media_type = 'episode' %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
+                    query = "SELECT MAX(session_history.id) AS id, shm.grandparent_title, " \
+                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
+                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
+                            "MAX(session_history.section_id) AS section_id, " \
+                            "MAX(shm.year) AS year, MAX(session_history.rating_key) AS rating_key, " \
+                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
+                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
+                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "WHERE session_history.media_type = 'episode' %s %s " \
                             "GROUP BY shm.grandparent_title " \
-                            "ORDER BY %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe, where_id, group_by, sort_type, stats_count, stats_start)
+                            "ORDER BY %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_tv: %s." % e)
@@ -547,22 +584,24 @@ class DataFactory(object):
             elif stat == 'popular_tv':
                 popular_tv = []
                 try:
-                    query = "SELECT sh.id, shm.grandparent_title, sh.grandparent_rating_key, " \
-                            "shm.grandparent_thumb, sh.section_id, " \
-                            "shm.year, sh.rating_key, shm.art, sh.media_type, " \
-                            "shm.content_rating, shm.labels, sh.started, shm.live, shm.guid, " \
-                            "COUNT(DISTINCT sh.user_id) AS users_watched, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) as total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE session_history.media_type = 'episode' %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
+                    query = "SELECT MAX(session_history.id) AS id, shm.grandparent_title, " \
+                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
+                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
+                            "MAX(session_history.section_id) AS section_id, " \
+                            "MAX(shm.year) AS year, MAX(session_history.rating_key) AS rating_key, " \
+                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
+                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
+                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "COUNT(DISTINCT session_history.user_id) AS users_watched, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "WHERE session_history.media_type = 'episode' %s %s " \
                             "GROUP BY shm.grandparent_title " \
-                            "ORDER BY users_watched DESC, %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe, where_id, group_by, sort_type, stats_count, stats_start)
+                            "ORDER BY users_watched DESC, %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_tv: %s." % e)
@@ -599,20 +638,24 @@ class DataFactory(object):
             elif stat == 'top_music':
                 top_music = []
                 try:
-                    query = "SELECT sh.id, shm.grandparent_title, shm.original_title, shm.year, " \
-                            "sh.grandparent_rating_key, shm.grandparent_thumb, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, sh.started, shm.live, shm.guid, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) AS total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE session_history.media_type = 'track' %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
+                    query = "SELECT MAX(session_history.id) AS id, " \
+                            "shm.grandparent_title, shm.original_title, " \
+                            "MAX(shm.year) AS year, " \
+                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
+                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
+                            "MAX(session_history.section_id) AS section_id, " \
+                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
+                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
+                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "WHERE session_history.media_type = 'track' %s %s " \
                             "GROUP BY shm.original_title, shm.grandparent_title " \
-                            "ORDER BY %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe, where_id, group_by, sort_type, stats_count, stats_start)
+                            "ORDER BY %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_music: %s." % e)
@@ -651,21 +694,25 @@ class DataFactory(object):
             elif stat == 'popular_music':
                 popular_music = []
                 try:
-                    query = "SELECT sh.id, shm.grandparent_title, shm.original_title, shm.year, " \
-                            "sh.grandparent_rating_key, shm.grandparent_thumb, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, sh.started, shm.live, shm.guid, " \
-                            "COUNT(DISTINCT sh.user_id) AS users_watched, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) as total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE session_history.media_type = 'track' %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
+                    query = "SELECT MAX(session_history.id) AS id, " \
+                            "shm.grandparent_title, shm.original_title, " \
+                            "MAX(shm.year) AS year, " \
+                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
+                            "MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
+                            "MAX(session_history.section_id) AS section_id, " \
+                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
+                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
+                            "MAX(session_history.started) AS started, MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "COUNT(DISTINCT session_history.user_id) AS users_watched, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "WHERE session_history.media_type = 'track' %s %s " \
                             "GROUP BY shm.original_title, shm.grandparent_title " \
-                            "ORDER BY users_watched DESC, %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe, where_id, group_by, sort_type, stats_count, stats_start)
+                            "ORDER BY users_watched DESC, %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe, where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: popular_music: %s." % e)
@@ -702,28 +749,32 @@ class DataFactory(object):
             elif stat == 'top_libraries':
                 top_libraries = []
                 try:
-                    query = "SELECT sh.id, shm.title, shm.grandparent_title, shm.full_title, shm.year, " \
-                            "shm.media_index, shm.parent_media_index, " \
-                            "sh.rating_key, shm.grandparent_rating_key, shm.thumb, shm.grandparent_thumb, " \
-                            "sh.user, sh.user_id, sh.player, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, shm.live, shm.guid, " \
-                            "ls.section_name, ls.section_type, " \
-                            "ls.thumb AS library_thumb, ls.custom_thumb_url AS custom_thumb, " \
-                            "ls.art AS library_art, ls.custom_art_url AS custom_art, " \
-                            "sh.started, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) AS total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
-                            "LEFT OUTER JOIN (SELECT * FROM library_sections WHERE deleted_section = 0) " \
-                            "   AS ls ON sh.section_id = ls.section_id " \
-                            "GROUP BY sh.section_id " \
-                            "ORDER BY %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe[4:], where_id, group_by, sort_type, stats_count, stats_start)
+                    query = "SELECT MAX(session_history.id) AS id, MAX(shm.title) AS title, " \
+                            "MAX(shm.grandparent_title) AS grandparent_title, MAX(shm.full_title) AS full_title, " \
+                            "MAX(shm.year) AS year, MAX(shm.media_index) AS media_index, " \
+                            "MAX(shm.parent_media_index) AS parent_media_index, " \
+                            "MAX(session_history.rating_key) AS rating_key, " \
+                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
+                            "MAX(shm.thumb) AS thumb, MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
+                            "MAX(session_history.user) AS user, MAX(session_history.user_id) AS user_id, " \
+                            "MAX(session_history.player) AS player, session_history.section_id AS section_id, " \
+                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
+                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
+                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "MAX(ls.section_name) AS section_name, MAX(ls.section_type) AS section_type, " \
+                            "MAX(ls.thumb) AS library_thumb, MAX(ls.custom_thumb_url) AS custom_thumb, " \
+                            "MAX(ls.art) AS library_art, MAX(ls.custom_art_url) AS custom_art, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "LEFT OUTER JOIN library_sections AS ls " \
+                            "   ON session_history.section_id = ls.section_id AND ls.deleted_section = 0 " \
+                            "WHERE %s %s " \
+                            "GROUP BY session_history.section_id " \
+                            "ORDER BY %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe[4:], where_id,
+                                                     sort_type, stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_libraries: %s." % e)
@@ -790,28 +841,31 @@ class DataFactory(object):
             elif stat == 'top_users':
                 top_users = []
                 try:
-                    query = "SELECT sh.id, shm.title, shm.grandparent_title, shm.full_title, shm.year, " \
-                            "shm.media_index, shm.parent_media_index, " \
-                            "sh.rating_key, shm.grandparent_rating_key, shm.thumb, shm.grandparent_thumb, " \
-                            "sh.user, sh.user_id, sh.player, sh.section_id, " \
-                            "shm.art, sh.media_type, shm.content_rating, shm.labels, shm.live, shm.guid, " \
-                            "u.thumb AS user_thumb, u.custom_avatar_url AS custom_thumb, " \
-                            "sh.started, " \
-                            "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = ''" \
-                            "   THEN u.username ELSE u.friendly_name END) " \
-                            "   AS friendly_name, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) AS total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
-                            "LEFT OUTER JOIN users AS u ON sh.user_id = u.user_id " \
-                            "GROUP BY sh.user_id " \
-                            "ORDER BY %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe[4:], where_id, group_by, sort_type, stats_count, stats_start)
+                    query = "SELECT MAX(session_history.id) AS id, MAX(shm.title) AS title, " \
+                            "MAX(shm.grandparent_title) AS grandparent_title, MAX(shm.full_title) AS full_title, " \
+                            "MAX(shm.year) AS year, MAX(shm.media_index) AS media_index, " \
+                            "MAX(shm.parent_media_index) AS parent_media_index, " \
+                            "MAX(session_history.rating_key) AS rating_key, " \
+                            "MAX(shm.grandparent_rating_key) AS grandparent_rating_key, " \
+                            "MAX(shm.thumb) AS thumb, MAX(shm.grandparent_thumb) AS grandparent_thumb, " \
+                            "MAX(session_history.user) AS user, session_history.user_id AS user_id, " \
+                            "MAX(session_history.player) AS player, MAX(session_history.section_id) AS section_id, " \
+                            "MAX(shm.art) AS art, MAX(session_history.media_type) AS media_type, " \
+                            "MAX(shm.content_rating) AS content_rating, MAX(shm.labels) AS labels, " \
+                            "MAX(shm.live) AS live, MAX(shm.guid) AS guid, " \
+                            "MAX(u.thumb) AS user_thumb, MAX(u.custom_avatar_url) AS custom_thumb, " \
+                            "MAX((CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = ''" \
+                            "   THEN u.username ELSE u.friendly_name END)) AS friendly_name, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "JOIN session_history_metadata AS shm ON shm.id = session_history.id " \
+                            "LEFT OUTER JOIN users AS u ON session_history.user_id = u.user_id " \
+                            "WHERE %s %s " \
+                            "GROUP BY session_history.user_id " \
+                            "ORDER BY %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe[4:], where_id,
+                                                     sort_type, stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_users: %s." % e)
@@ -868,17 +922,15 @@ class DataFactory(object):
                 top_platform = []
 
                 try:
-                    query = "SELECT sh.platform, sh.started, " \
-                            "MAX(sh.started) AS last_watch, COUNT(sh.id) AS total_plays, SUM(sh.d) AS total_duration " \
-                            "FROM (SELECT *, SUM(CASE WHEN stopped > 0 THEN (stopped - started) - " \
-                            "       (CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) " \
-                            "       AS d " \
-                            "   FROM session_history " \
-                            "   WHERE %s %s " \
-                            "   GROUP BY %s) AS sh " \
-                            "GROUP BY sh.platform " \
-                            "ORDER BY %s DESC, sh.started DESC " \
-                            "LIMIT %s OFFSET %s " % (where_timeframe[4:], where_id, group_by, sort_type, stats_count, stats_start)
+                    query = "SELECT session_history.platform, " \
+                            "MAX(session_history.started) AS last_watch, " \
+                            "COUNT(DISTINCT %s) AS total_plays, SUM(%s) AS total_duration " \
+                            "FROM session_history " \
+                            "WHERE %s %s " \
+                            "GROUP BY session_history.platform " \
+                            "ORDER BY %s DESC, last_watch DESC " \
+                            "LIMIT %s OFFSET %s " % (group_key, duration_expr, where_timeframe[4:], where_id, sort_type,
+                                                     stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: top_platforms: %s." % e)
@@ -917,38 +969,41 @@ class DataFactory(object):
                 movie_watched_percent = plexpy.CONFIG.MOVIE_WATCHED_PERCENT
                 tv_watched_percent = plexpy.CONFIG.TV_WATCHED_PERCENT
 
+                view_offset_expr = "(CASE WHEN sh.view_offset IS NULL THEN 0.1 ELSE sh.view_offset * 1.0 END)"
+                duration_expr_watched = "(CASE WHEN shm.duration IS NULL THEN 1.0 ELSE shm.duration * 1.0 END)"
+                percent_complete_expr = "(%s / %s * 100)" % (view_offset_expr, duration_expr_watched)
+
                 if plexpy.CONFIG.WATCHED_MARKER == 1:
-                    watched_threshold = (
+                    watched_threshold_expr = (
                         "(CASE WHEN shm.marker_credits_final IS NULL "
-                        "THEN sh._duration * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
-                        "ELSE shm.marker_credits_final END) "
-                        "AS watched_threshold"
-                    ) % (movie_watched_percent, tv_watched_percent)
-                    watched_where = "_view_offset >= watched_threshold"
+                        "THEN %s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
+                        "ELSE shm.marker_credits_final END)"
+                    ) % (duration_expr_watched, movie_watched_percent, tv_watched_percent)
+                    watched_where = "%s >= %s" % (view_offset_expr, watched_threshold_expr)
                 elif plexpy.CONFIG.WATCHED_MARKER == 2:
-                    watched_threshold = (
+                    watched_threshold_expr = (
                         "(CASE WHEN shm.marker_credits_first IS NULL "
-                        "THEN sh._duration * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
-                        "ELSE shm.marker_credits_first END) "
-                        "AS watched_threshold"
-                    ) % (movie_watched_percent, tv_watched_percent)
-                    watched_where = "_view_offset >= watched_threshold"
+                        "THEN %s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
+                        "ELSE shm.marker_credits_first END)"
+                    ) % (duration_expr_watched, movie_watched_percent, tv_watched_percent)
+                    watched_where = "%s >= %s" % (view_offset_expr, watched_threshold_expr)
                 elif plexpy.CONFIG.WATCHED_MARKER == 3:
-                    watched_threshold = (
-                        "MIN("
+                    watched_threshold_expr = (
+                        "LEAST("
                         "(CASE WHEN shm.marker_credits_first IS NULL "
-                        "THEN sh._duration * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
+                        "THEN %s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0 "
                         "ELSE shm.marker_credits_first END), "
-                        "sh._duration * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0) "
-                        "AS watched_threshold"
-                    ) % (movie_watched_percent, tv_watched_percent, movie_watched_percent, tv_watched_percent)
-                    watched_where = "_view_offset >= watched_threshold"
+                        "%s * (CASE WHEN sh.media_type = 'movie' THEN %d ELSE %d END) / 100.0)"
+                    ) % (duration_expr_watched, movie_watched_percent, tv_watched_percent,
+                         duration_expr_watched, movie_watched_percent, tv_watched_percent)
+                    watched_where = "%s >= %s" % (view_offset_expr, watched_threshold_expr)
                 else:
-                    watched_threshold = "NULL AS watched_threshold"
+                    watched_threshold_expr = "NULL"
                     watched_where = (
-                        "sh.media_type == 'movie' AND percent_complete >= %d "
-                        "OR sh.media_type == 'episode' AND percent_complete >= %d"
-                    ) % (movie_watched_percent, tv_watched_percent)
+                        "(sh.media_type = 'movie' AND %s >= %d) "
+                        "OR (sh.media_type = 'episode' AND %s >= %d)"
+                    ) % (percent_complete_expr, movie_watched_percent,
+                         percent_complete_expr, tv_watched_percent)
 
                 last_watched = []
                 try:
@@ -960,25 +1015,21 @@ class DataFactory(object):
                             "(CASE WHEN u.friendly_name IS NULL OR TRIM(u.friendly_name) = ''" \
                             "   THEN u.username ELSE u.friendly_name END) " \
                             "   AS friendly_name, " \
-                            "MAX(sh.started) AS last_watch, sh._view_offset, sh._duration, " \
-                            "(sh._view_offset / sh._duration * 100) AS percent_complete, " \
-                            "%s " \
-                            "FROM (SELECT *, MAX(session_history.id), " \
-                            "   (CASE WHEN view_offset IS NULL THEN 0.1 ELSE view_offset * 1.0 END) AS _view_offset, " \
-                            "   (CASE WHEN duration IS NULL THEN 1.0 ELSE duration * 1.0 END) AS _duration " \
+                            "sh.started AS last_watch, %s AS _view_offset, %s AS _duration, " \
+                            "%s AS percent_complete, " \
+                            "%s AS watched_threshold " \
+                            "FROM (SELECT DISTINCT ON (%s) session_history.* " \
                             "   FROM session_history " \
-                            "   JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                             "   WHERE (session_history.media_type = 'movie' " \
                             "           OR session_history.media_type = 'episode') %s %s " \
-                            "   GROUP BY %s) AS sh " \
+                            "   ORDER BY %s, session_history.started DESC, session_history.id DESC) AS sh " \
                             "JOIN session_history_metadata AS shm ON shm.id = sh.id " \
                             "LEFT OUTER JOIN users AS u ON sh.user_id = u.user_id " \
                             "WHERE %s " \
-                            "GROUP BY sh.id " \
                             "ORDER BY last_watch DESC " \
-                            "LIMIT %s OFFSET %s" % (watched_threshold,
-                                                    where_timeframe, where_id, group_by, watched_where,
-                                                    stats_count, stats_start)
+                            "LIMIT %s OFFSET %s" % (view_offset_expr, duration_expr_watched, percent_complete_expr,
+                                                    watched_threshold_expr, group_key, where_timeframe, where_id,
+                                                    group_key, watched_where, stats_count, stats_start)
                     result = monitor_db.select(query)
                 except Exception as e:
                     logger.warn("Tautulli DataFactory :: Unable to execute database query for get_home_stats: last_watched: %s." % e)
@@ -1122,12 +1173,18 @@ class DataFactory(object):
                     "sh.rating_key, shm.grandparent_rating_key, shm.thumb, shm.grandparent_thumb, " \
                     "sh.user, sh.user_id, sh.player, " \
                     "shm.art, sh.media_type, shm.content_rating, shm.labels, shm.live, shm.guid, " \
-                    "MAX(sh.started) AS last_watch " \
+                    "sh.started AS last_watch " \
                     "FROM library_sections AS ls " \
-                    "LEFT OUTER JOIN session_history AS sh ON ls.section_id = sh.section_id " \
+                    "LEFT JOIN LATERAL (" \
+                    "   SELECT sh.id, sh.rating_key, sh.user, sh.user_id, sh.player, sh.section_id, " \
+                    "          sh.media_type, sh.started " \
+                    "   FROM session_history AS sh " \
+                    "   WHERE sh.section_id = ls.section_id " \
+                    "   ORDER BY sh.started DESC, sh.id DESC " \
+                    "   LIMIT 1" \
+                    ") AS sh ON TRUE " \
                     "LEFT OUTER JOIN session_history_metadata AS shm ON sh.id = shm.id " \
                     "WHERE ls.section_id IN (%s) AND ls.deleted_section = 0 " \
-                    "GROUP BY ls.id " \
                     "ORDER BY ls.section_type, ls.count DESC, ls.parent_count DESC, ls.child_count DESC " % ",".join(library_cards)
             result = monitor_db.select(query)
         except Exception as e:
@@ -1647,9 +1704,7 @@ class DataFactory(object):
 
         try:
             query = "SELECT SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE 0 END) - " \
-                    "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS total_duration, " \
-                    "(CASE WHEN session_history_metadata.live = 1 THEN 'live' ELSE session_history.media_type END) " \
-                    "AS media_type_live " \
+                    "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS total_duration " \
                     "FROM session_history " \
                     "JOIN session_history_metadata ON session_history_metadata.id = session_history.id " \
                     "JOIN session_history_media_info ON session_history_media_info.id = session_history.id " \

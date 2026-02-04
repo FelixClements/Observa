@@ -26,7 +26,7 @@ import certifi
 import websocket
 
 import plexpy
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import cleanup
 from plexpy.integrations import plextv
 from plexpy.services import activity_handler
 from plexpy.services import activity_pinger
@@ -48,7 +48,7 @@ def start_thread():
     except Exception as e:
         logger.error("Tautulli WebSocket :: Failed to check for active sessions: %s." % e)
         logger.warn("Tautulli WebSocket :: Attempt to fix by flushing temporary sessions...")
-        database.delete_sessions()
+        cleanup.delete_sessions()
 
     # Start the websocket listener on it's own thread
     thread = threading.Thread(target=run)

@@ -37,7 +37,7 @@ from plexpy.db import datafactory
 from plexpy.integrations import pmsconnect
 from plexpy.services import notifiers
 from plexpy.util import request
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import database
 from plexpy.services import activity_processor
 from plexpy.services.newsletter_handler import notify as notify_newsletter
 from plexpy.util import helpers

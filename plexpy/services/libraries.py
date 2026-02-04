@@ -21,10 +21,11 @@ import os
 import plexpy
 from plexpy.app import common
 from plexpy.db import datatables
+from plexpy.db import cleanup
 from plexpy.integrations import pmsconnect
 from plexpy.services import users
 from plexpy.web import session
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import database
 from plexpy.integrations import plextv
 from plexpy.integrations.plex import Plex
 from plexpy.util import helpers
@@ -51,12 +52,13 @@ def refresh_libraries():
         section_ids = [common.LIVE_TV_SECTION_ID]  # Live TV library always considered active
 
         for section in library_sections:
-            section_ids.append(helpers.cast_to_int(section['section_id']))
+            section_id = helpers.cast_to_int(section['section_id'])
+            section_ids.append(section_id)
 
             section_keys = {'server_id': server_id,
-                            'section_id': section['section_id']}
+                            'section_id': section_id}
             section_values = {'server_id': server_id,
-                              'section_id': section['section_id'],
+                              'section_id': section_id,
                               'section_name': section['section_name'],
                               'section_type': section['section_type'],
                               'agent': section['agent'],
@@ -308,7 +310,10 @@ class Libraries(object):
         if session.get_session_shared_libraries():
             custom_where.append(['library_sections.section_id', session.get_session_shared_libraries()])
 
-        group_by = 'session_history.reference_id' if grouping else 'session_history.id'
+        group_key = (
+            'COALESCE(session_history.reference_id, session_history.id)'
+            if grouping else 'session_history.id'
+        )
 
         columns = ["library_sections.id AS row_id",
                    "library_sections.server_id",
@@ -322,28 +327,26 @@ class Libraries(object):
                    "library_sections.custom_thumb_url AS custom_thumb",
                    "library_sections.art AS library_art",
                    "library_sections.custom_art_url AS custom_art",
-                   "COUNT(DISTINCT %s) AS plays" % group_by,
-                   "SUM(CASE WHEN session_history.stopped > 0 THEN (session_history.stopped - session_history.started) \
-                    ELSE 0 END) - SUM(CASE WHEN session_history.paused_counter IS NULL THEN 0 ELSE \
-                    session_history.paused_counter END) AS duration",
-                   "MAX(session_history.started) AS last_accessed",
-                   "MAX(session_history.id) AS history_row_id",
-                   "session_history_metadata.full_title AS last_played",
-                   "session_history.rating_key",
-                   "session_history_metadata.media_type",
-                   "session_history_metadata.thumb",
-                   "session_history_metadata.parent_thumb",
-                   "session_history_metadata.grandparent_thumb",
-                   "session_history_metadata.parent_title",
-                   "session_history_metadata.year",
-                   "session_history_metadata.media_index",
-                   "session_history_metadata.parent_media_index",
-                   "session_history_metadata.content_rating",
-                   "session_history_metadata.labels",
-                   "session_history_metadata.live",
-                   "session_history_metadata.added_at",
-                   "session_history_metadata.originally_available_at",
-                   "session_history_metadata.guid",
+                   "COALESCE(sh_stats.plays, 0) AS plays",
+                   "COALESCE(sh_stats.duration, 0) AS duration",
+                   "last_sh.started AS last_accessed",
+                   "last_sh.id AS history_row_id",
+                   "last_shm.full_title AS last_played",
+                   "last_sh.rating_key",
+                   "last_shm.media_type",
+                   "last_shm.thumb",
+                   "last_shm.parent_thumb",
+                   "last_shm.grandparent_thumb",
+                   "last_shm.parent_title",
+                   "last_shm.year",
+                   "last_shm.media_index",
+                   "last_shm.parent_media_index",
+                   "last_shm.content_rating",
+                   "last_shm.labels",
+                   "last_shm.live",
+                   "last_shm.added_at",
+                   "last_shm.originally_available_at",
+                   "last_shm.guid",
                    "library_sections.do_notify",
                    "library_sections.do_notify_created",
                    "library_sections.keep_history",
@@ -353,16 +356,31 @@ class Libraries(object):
             query = data_tables.ssp_query(table_name='library_sections',
                                           columns=columns,
                                           custom_where=custom_where,
-                                          group_by=['library_sections.server_id', 'library_sections.section_id'],
+                                          group_by=[],
                                           join_types=['LEFT OUTER JOIN',
                                                       'LEFT OUTER JOIN',
                                                       'LEFT OUTER JOIN'],
-                                          join_tables=['session_history',
-                                                       'session_history_metadata',
-                                                       'session_history_media_info'],
-                                          join_evals=[['session_history.section_id', 'library_sections.section_id'],
-                                                      ['session_history.id', 'session_history_metadata.id'],
-                                                      ['session_history.id', 'session_history_media_info.id']],
+                                          join_tables=[
+                                              'LATERAL (SELECT COUNT(DISTINCT %s) AS plays, '
+                                              'SUM(CASE WHEN session_history.stopped > 0 '
+                                              'THEN (session_history.stopped - session_history.started) '
+                                              'ELSE 0 END) - '
+                                              'SUM(CASE WHEN session_history.paused_counter IS NULL '
+                                              'THEN 0 ELSE session_history.paused_counter END) AS duration '
+                                              'FROM session_history '
+                                              'WHERE session_history.section_id = library_sections.section_id) '
+                                              'AS sh_stats' % group_key,
+                                              'LATERAL (SELECT session_history.id, session_history.rating_key, '
+                                              'session_history.started '
+                                              'FROM session_history '
+                                              'WHERE session_history.section_id = library_sections.section_id '
+                                              'ORDER BY session_history.started DESC, session_history.id DESC '
+                                              'LIMIT 1) AS last_sh',
+                                              'session_history_metadata AS last_shm',
+                                          ],
+                                          join_evals=[['1', '1'],
+                                                      ['1', '1'],
+                                                      ['last_sh.id', 'last_shm.id']],
                                           kwargs=kwargs)
         except Exception as e:
             logger.warn("Tautulli Libraries :: Unable to execute database query for get_list: %s." % e)
@@ -1104,7 +1122,7 @@ class Libraries(object):
         elif str(section_id).isdigit():
             server_id = server_id or plexpy.CONFIG.PMS_IDENTIFIER
             if server_id == plexpy.CONFIG.PMS_IDENTIFIER:
-                delete_success = database.delete_library_history(section_id=section_id)
+                delete_success = cleanup.delete_library_history(section_id=section_id)
             else:
                 logger.warn("Tautulli Libraries :: Library history not deleted for library section_id %s "
                             "because library server_id %s does not match Plex server identifier %s."

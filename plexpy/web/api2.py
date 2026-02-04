@@ -29,6 +29,7 @@ import traceback
 
 import cherrypy
 import xmltodict
+from sqlalchemy import text
 
 import plexpy
 from plexpy.app import common
@@ -38,7 +39,8 @@ from plexpy.services import notifiers
 from plexpy.services import newsletters
 from plexpy.services import users
 from plexpy.config import core as config
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import maintenance
+from plexpy.db.engine import get_engine
 from plexpy.integrations import plextv
 from plexpy.services import newsletter_handler
 from plexpy.services import notification_handler
@@ -323,17 +325,18 @@ class API2(object):
 
         # allow the user to shoot them self
         # in the foot but not in the head..
-        if not len(os.listdir(plexpy.CONFIG.BACKUP_DIR)):
+        backup_dir = plexpy.CONFIG.BACKUP_DIR
+        if not os.path.isdir(backup_dir) or not os.listdir(backup_dir):
             self.backup_db()
         else:
             # If the backup is less then 24 h old lets make a backup
-            if not any(os.path.getctime(os.path.join(plexpy.CONFIG.BACKUP_DIR, file_)) > (time.time() - 86400)
-                    and file_.endswith('.db') for file_ in os.listdir(plexpy.CONFIG.BACKUP_DIR)):
+            if not maintenance.has_recent_backup(backup_dir, 86400):
                 self.backup_db()
 
-        db = database.MonitorDatabase()
-        rows = db.select(query)
-        return rows
+        engine = get_engine()
+        with engine.connect() as connection:
+            result = connection.execute(text(query))
+            return [dict(row) for row in result.mappings().all()]
 
     def backup_config(self):
         """ Create a manual backup of the `config.ini` file."""
@@ -344,9 +347,9 @@ class API2(object):
         return data
 
     def backup_db(self):
-        """ Create a manual backup of the `plexpy.db` file."""
+        """ Create a manual backup of the database."""
 
-        data = database.make_backup()
+        data = maintenance.make_backup()
         self._api_result_type = 'success' if data else 'error'
 
         return data

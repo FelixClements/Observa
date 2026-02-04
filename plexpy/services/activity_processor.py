@@ -20,7 +20,8 @@ import plexpy
 from plexpy.integrations import pmsconnect
 from plexpy.services import libraries
 from plexpy.services import users
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import maintenance
+from plexpy.db import database
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -489,14 +490,15 @@ class ActivityProcessor(object):
 
         if session['live']:
             # Check if we should group the session, select the last guid from the user within the last day
+            min_started = helpers.timestamp() - 24 * 60 * 60
             query = "SELECT session_history.id, session_history_metadata.guid, session_history.reference_id " \
                     "FROM session_history " \
                     "JOIN session_history_metadata ON session_history.id == session_history_metadata.id " \
                     "WHERE session_history.id <= ? AND session_history.user_id = ? " \
-                    "AND datetime(session_history.started, 'unixepoch', 'localtime') > datetime('now', '-1 day') " \
+                    "AND session_history.started >= ? " \
                     "ORDER BY session_history.id DESC LIMIT 1 "
 
-            args = [last_id, session['user_id']]
+            args = [last_id, session['user_id'], min_started]
 
             result = db.select(query=query, args=args)
 
@@ -669,9 +671,9 @@ class ActivityProcessor(object):
     def set_session_buffer_trigger_time(self, session_key=None):
         db = database.MonitorDatabase()
         if str(session_key).isdigit():
-            db.action("UPDATE sessions SET buffer_last_triggered = strftime('%s', 'now') "
-                           "WHERE session_key = ?",
-                           [session_key])
+            db.action("UPDATE sessions SET buffer_last_triggered = EXTRACT(EPOCH FROM NOW())::int "
+                      "WHERE session_key = ?",
+                      [session_key])
 
     def get_session_buffer_trigger_time(self, session_key=None):
         db = database.MonitorDatabase()
@@ -731,7 +733,7 @@ class ActivityProcessor(object):
 
     def regroup_history(self):
         logger.info("Tautulli ActivityProcessor :: Creating database backup...")
-        if not database.make_backup():
+        if not maintenance.make_backup():
             return False
 
         logger.info("Tautulli ActivityProcessor :: Regrouping session history...")

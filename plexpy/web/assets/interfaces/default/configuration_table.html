@@ -11,7 +11,6 @@ DOCUMENTATION :: END
 
 <%!
     import os
-    import sqlite3
     import sys
     import plexpy
     from plexpy.app import common
@@ -36,8 +35,10 @@ DOCUMENTATION :: END
             <td><a class="no-highlight" href="download_config" data-toggle="tooltip" data-placement="right" title="Download Configuration">${plexpy.CONFIG_FILE}</a></td>
         </tr>
         <tr>
-            <td>Database File:</td>
-            <td><a class="no-highlight" href="download_database" data-toggle="tooltip" data-placement="right" title="Download Database">${plexpy.DB_FILE}</a> | <a class="no-highlight" href="status/database">Status</a></td>
+            <td>Database:</td>
+            <td><a class="no-highlight" href="download_database" data-toggle="tooltip" data-placement="right" title="Download Database">Download Database</a>
+                (${('%s:%s/%s' % (plexpy.CONFIG.DB_HOST or 'localhost', plexpy.CONFIG.DB_PORT or '5432', plexpy.CONFIG.DB_NAME or 'postgres'))})
+                | <a class="no-highlight" href="status/database">Status</a></td>
         </tr>
         <tr>
             <td>Log File:</td>
@@ -80,10 +81,6 @@ DOCUMENTATION :: END
         <tr>
             <td>Python Version:</td>
             <td>${sys.version}</td>
-        </tr>
-        <tr>
-            <td>SQLite Version:</td>
-            <td>${sqlite3.sqlite_version}</td>
         </tr>
         <tr>
             <td class="top-line">Resources:</td>

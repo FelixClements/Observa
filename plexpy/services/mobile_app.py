@@ -17,8 +17,10 @@
 
 import requests
 import threading
+from sqlalchemy import delete, func, select, update
 
-from plexpy.db import sqlite_legacy as database
+from plexpy.db.models import MobileDevice
+from plexpy.db.session import session_scope
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -27,6 +29,21 @@ _ONESIGNAL_APP_ID = '3b4b666a-d557-4b92-acdf-e2c8c4b95357'
 _ONESIGNAL_DISABLED = 'onesignal-disabled'
 
 TEMP_DEVICE_TOKENS = {}
+
+
+def _device_to_dict(device: MobileDevice) -> dict:
+    return {
+        'id': device.id,
+        'device_id': device.device_id,
+        'device_token': device.device_token,
+        'device_name': device.device_name,
+        'platform': device.platform,
+        'version': device.version,
+        'friendly_name': device.friendly_name,
+        'onesignal_id': device.onesignal_id,
+        'last_seen': device.last_seen,
+        'official': device.official,
+    }
 
 
 def set_temp_device_token(token=None, remove=False, add=False, success=False):
@@ -54,23 +71,16 @@ def get_temp_device_token(token=None):
 
 
 def get_mobile_devices(device_id=None, device_token=None):
-    where = where_id = where_token = ''
-    args = []
+    stmt = select(MobileDevice)
+    if device_id:
+        stmt = stmt.where(MobileDevice.device_id == device_id)
+    if device_token:
+        stmt = stmt.where(MobileDevice.device_token == device_token)
 
-    if device_id or device_token:
-        where = "WHERE "
-        if device_id:
-            where_id += "device_id = ?"
-            args.append(device_id)
-        if device_token:
-            where_token = "device_token = ?"
-            args.append(device_token)
-        where += " AND ".join([w for w in [where_id, where_token] if w])
+    with session_scope() as session:
+        devices = session.execute(stmt).scalars().all()
 
-    db = database.MonitorDatabase()
-    result = db.select("SELECT * FROM mobile_devices %s" % where, args=args)
-
-    return result
+    return [_device_to_dict(device) for device in devices]
 
 
 def get_mobile_device_by_token(device_token=None):
@@ -82,26 +92,30 @@ def get_mobile_device_by_token(device_token=None):
 
 def add_mobile_device(device_id=None, device_name=None, device_token=None,
                       platform=None, version=None, friendly_name=None, onesignal_id=None):
-    db = database.MonitorDatabase()
-
-    keys = {'device_id': device_id}
-    values = {'device_name': device_name,
-              'device_token': device_token,
-              'platform': platform,
-              'version': version,
-              'onesignal_id': onesignal_id}
-
-    if friendly_name:
-        values['friendly_name'] = friendly_name
-
     try:
-        result = db.upsert(table_name='mobile_devices', key_dict=keys, value_dict=values)
+        with session_scope() as session:
+            stmt = select(MobileDevice).where(MobileDevice.device_id == device_id)
+            device = session.execute(stmt).scalar_one_or_none()
+            is_insert = device is None
+
+            if device is None:
+                device = MobileDevice(device_id=device_id)
+                session.add(device)
+
+            device.device_name = device_name
+            device.device_token = device_token
+            device.platform = platform
+            device.version = version
+            device.onesignal_id = onesignal_id
+            if friendly_name:
+                device.friendly_name = friendly_name
+
         blacklist_logger()
     except Exception as e:
         logger.warn("Tautulli MobileApp :: Failed to register mobile device in the database: %s." % e)
         return
 
-    if result == 'insert':
+    if is_insert:
         logger.info("Tautulli MobileApp :: Registered mobile device '%s' in the database." % device_name)
     else:
         logger.info("Tautulli MobileApp :: Re-registered mobile device '%s' in the database." % device_name)
@@ -118,9 +132,11 @@ def get_mobile_device_config(mobile_device_id=None):
         logger.error("Tautulli MobileApp :: Unable to retrieve mobile device config: invalid mobile_device_id %s." % mobile_device_id)
         return None
 
-    db = database.MonitorDatabase()
-    result = db.select_single("SELECT * FROM mobile_devices WHERE id = ?",
-                              args=[mobile_device_id])
+    with session_scope() as session:
+        device = session.get(MobileDevice, mobile_device_id)
+        if device is None:
+            return None
+        result = _device_to_dict(device)
 
     if result['onesignal_id'] == _ONESIGNAL_DISABLED:
         result['onesignal_id'] = ''
@@ -135,12 +151,13 @@ def set_mobile_device_config(mobile_device_id=None, **kwargs):
         logger.error("Tautulli MobileApp :: Unable to set existing mobile device: invalid mobile_device_id %s." % mobile_device_id)
         return False
 
-    keys = {'id': mobile_device_id}
-    values = {'friendly_name': kwargs.get('friendly_name', '')}
-
-    db = database.MonitorDatabase()
     try:
-        db.upsert(table_name='mobile_devices', key_dict=keys, value_dict=values)
+        with session_scope() as session:
+            device = session.get(MobileDevice, mobile_device_id)
+            if device is None:
+                return False
+            device.friendly_name = kwargs.get('friendly_name', '')
+
         logger.info("Tautulli MobileApp :: Updated mobile device agent: mobile_device_id %s." % mobile_device_id)
         blacklist_logger()
         return True
@@ -150,42 +167,49 @@ def set_mobile_device_config(mobile_device_id=None, **kwargs):
 
 
 def delete_mobile_device(mobile_device_id=None, device_id=None):
-    db = database.MonitorDatabase()
-
     if mobile_device_id:
         logger.debug("Tautulli MobileApp :: Deleting mobile_device_id %s from the database." % mobile_device_id)
-        result = db.action("DELETE FROM mobile_devices WHERE id = ?", args=[mobile_device_id])
+        with session_scope() as session:
+            session.execute(delete(MobileDevice).where(MobileDevice.id == mobile_device_id))
         return True
     elif device_id:
         logger.debug("Tautulli MobileApp :: Deleting device_id %s from the database." % device_id)
-        result = db.action("DELETE FROM mobile_devices WHERE device_id = ?", args=[device_id])
+        with session_scope() as session:
+            session.execute(delete(MobileDevice).where(MobileDevice.device_id == device_id))
         return True
     else:
         return False
 
 
 def set_official(device_id, onesignal_id):
-    db = database.MonitorDatabase()
     official = validate_onesignal_id(onesignal_id=onesignal_id)
     platform = 'android' if official > 0 else None
 
     try:
-        result = db.action("UPDATE mobile_devices "
-                           "SET official = ?, platform = coalesce(platform, ?) "
-                           "WHERE device_id = ?",
-                           args=[official, platform, device_id])
+        with session_scope() as session:
+            session.execute(
+                update(MobileDevice)
+                .where(MobileDevice.device_id == device_id)
+                .values(
+                    official=official,
+                    platform=func.coalesce(MobileDevice.platform, platform),
+                )
+            )
     except Exception as e:
         logger.warn("Tautulli MobileApp :: Failed to set official flag for device: %s." % e)
         return
 
 
 def set_last_seen(device_token=None):
-    db = database.MonitorDatabase()
     last_seen = helpers.timestamp()
 
     try:
-        result = db.action("UPDATE mobile_devices SET last_seen = ? WHERE device_token = ?",
-                           args=[last_seen, device_token])
+        with session_scope() as session:
+            session.execute(
+                update(MobileDevice)
+                .where(MobileDevice.device_token == device_token)
+                .values(last_seen=last_seen)
+            )
     except Exception as e:
         logger.warn("Tautulli MobileApp :: Failed to set last_seen time for device: %s." % e)
         return

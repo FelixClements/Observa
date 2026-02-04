@@ -24,12 +24,14 @@ import re
 import arrow
 from mako.lookup import TemplateLookup
 from mako import exceptions
+from sqlalchemy import delete, func, select
 
 import plexpy
 from plexpy.app import common
 from plexpy.services import libraries
 from plexpy.integrations import pmsconnect
-from plexpy.db import sqlite_legacy as database
+from plexpy.db.models import Newsletter as NewsletterModel, NewsletterLog
+from plexpy.db.session import session_scope
 from plexpy.services import newsletter_handler
 from plexpy.util import helpers
 from plexpy.util import logger
@@ -98,40 +100,70 @@ def get_newsletter_agents():
     return tuple(a['name'] for a in sorted(available_newsletter_agents(), key=lambda k: k['label']))
 
 
+def _newsletter_to_dict(newsletter):
+    return {
+        'id': newsletter.id,
+        'agent_id': newsletter.agent_id,
+        'agent_name': newsletter.agent_name,
+        'agent_label': newsletter.agent_label,
+        'id_name': newsletter.id_name,
+        'friendly_name': newsletter.friendly_name,
+        'newsletter_config': newsletter.newsletter_config,
+        'email_config': newsletter.email_config,
+        'subject': newsletter.subject,
+        'body': newsletter.body,
+        'message': newsletter.message,
+        'cron': newsletter.cron,
+        'active': newsletter.active,
+    }
+
+
 def get_newsletters(newsletter_id=None):
-    where = where_id = ''
-    args = []
-
-    if newsletter_id:
-        where = "WHERE "
-        if newsletter_id:
-            where_id += "newsletters.id = ?"
-            args.append(newsletter_id)
-        where += " AND ".join([w for w in [where_id] if w])
-
-    db = database.MonitorDatabase()
-    result = db.select(
-        (
-            "SELECT newsletters.id, newsletters.agent_id, newsletters.agent_name, newsletters.agent_label, "
-            "newsletters.friendly_name, newsletters.cron, newsletters.active, "
-            "MAX(newsletter_log.timestamp) AS last_triggered, newsletter_log.success AS last_success "
-            "FROM newsletters "
-            "LEFT OUTER JOIN newsletter_log ON newsletters.id = newsletter_log.newsletter_id "
-            "%s "
-            "GROUP BY newsletters.id"
-        ) % where, args=args
+    last_triggered = (
+        select(func.max(NewsletterLog.timestamp))
+        .where(NewsletterLog.newsletter_id == NewsletterModel.id)
+        .correlate(NewsletterModel)
+        .scalar_subquery()
+    )
+    last_success = (
+        select(NewsletterLog.success)
+        .where(NewsletterLog.newsletter_id == NewsletterModel.id)
+        .order_by(NewsletterLog.timestamp.desc(), NewsletterLog.id.desc())
+        .limit(1)
+        .correlate(NewsletterModel)
+        .scalar_subquery()
     )
 
-    return result
+    stmt = (
+        select(
+            NewsletterModel.id,
+            NewsletterModel.agent_id,
+            NewsletterModel.agent_name,
+            NewsletterModel.agent_label,
+            NewsletterModel.friendly_name,
+            NewsletterModel.cron,
+            NewsletterModel.active,
+            last_triggered.label('last_triggered'),
+            last_success.label('last_success'),
+        )
+        .order_by(NewsletterModel.id)
+    )
+
+    if newsletter_id:
+        stmt = stmt.where(NewsletterModel.id == newsletter_id)
+
+    with session_scope() as session:
+        result = session.execute(stmt).mappings().all()
+
+    return [dict(row) for row in result]
 
 
 def delete_newsletter(newsletter_id=None):
-    db = database.MonitorDatabase()
-
     if str(newsletter_id).isdigit():
         logger.debug("Tautulli Newsletters :: Deleting newsletter_id %s from the database."
                      % newsletter_id)
-        result = db.action("DELETE FROM newsletters WHERE id = ?", args=[newsletter_id])
+        with session_scope() as session:
+            session.execute(delete(NewsletterModel).where(NewsletterModel.id == newsletter_id))
         return True
     else:
         return False
@@ -145,15 +177,15 @@ def get_newsletter_config(newsletter_id=None, mask_passwords=False):
                      % newsletter_id)
         return None
 
-    db = database.MonitorDatabase()
-    result = db.select_single("SELECT * FROM newsletters WHERE id = ?", args=[newsletter_id])
-
-    if not result:
-        return None
+    with session_scope() as session:
+        newsletter = session.get(NewsletterModel, newsletter_id)
+        if newsletter is None:
+            return None
+        result = _newsletter_to_dict(newsletter)
 
     try:
-        config = json.loads(result.pop('newsletter_config', '{}'))
-        email_config = json.loads(result.pop('email_config', '{}'))
+        config = json.loads(result.pop('newsletter_config') or '{}')
+        email_config = json.loads(result.pop('email_config') or '{}')
         subject = result.pop('subject')
         body = result.pop('body')
         message = result.pop('message')
@@ -196,23 +228,23 @@ def add_newsletter_config(agent_id=None, **kwargs):
 
     agent_class = get_agent_class(agent_id=agent['id'])
 
-    keys = {'id': None}
-    values = {'agent_id': agent['id'],
-              'agent_name': agent['name'],
-              'agent_label': agent['label'],
-              'id_name': '',
-              'friendly_name': '',
-              'newsletter_config': json.dumps(agent_class.config),
-              'email_config': json.dumps(agent_class.email_config),
-              'subject': agent_class.subject,
-              'body': agent_class.body,
-              'message': agent_class.message
-              }
-
-    db = database.MonitorDatabase()
     try:
-        db.upsert(table_name='newsletters', key_dict=keys, value_dict=values)
-        newsletter_id = db.last_insert_id()
+        with session_scope() as session:
+            newsletter = NewsletterModel(
+                agent_id=agent['id'],
+                agent_name=agent['name'],
+                agent_label=agent['label'],
+                id_name='',
+                friendly_name='',
+                newsletter_config=json.dumps(agent_class.config),
+                email_config=json.dumps(agent_class.email_config),
+                subject=agent_class.subject,
+                body=agent_class.body,
+                message=agent_class.message,
+            )
+            session.add(newsletter)
+            session.flush()
+            newsletter_id = newsletter.id
         logger.info("Tautulli Newsletters :: Added new newsletter agent: %s (newsletter_id %s)."
                     % (agent['label'], newsletter_id))
         blacklist_logger()
@@ -260,24 +292,24 @@ def set_newsletter_config(newsletter_id=None, agent_id=None, **kwargs):
                                   config=newsletter_config, email_config=email_config,
                                   subject=subject, body=body, message=message)
 
-    keys = {'id': newsletter_id}
-    values = {'agent_id': agent['id'],
-              'agent_name': agent['name'],
-              'agent_label': agent['label'],
-              'id_name': kwargs.get('id_name', ''),
-              'friendly_name': kwargs.get('friendly_name', ''),
-              'newsletter_config': json.dumps(agent_class.config),
-              'email_config': json.dumps(agent_class.email_config),
-              'subject': agent_class.subject,
-              'body': agent_class.body,
-              'message': agent_class.message,
-              'cron': kwargs.get('cron'),
-              'active': kwargs.get('active')
-              }
-
-    db = database.MonitorDatabase()
     try:
-        db.upsert(table_name='newsletters', key_dict=keys, value_dict=values)
+        with session_scope() as session:
+            newsletter = session.get(NewsletterModel, newsletter_id)
+            if newsletter is None:
+                return False
+
+            newsletter.agent_id = agent['id']
+            newsletter.agent_name = agent['name']
+            newsletter.agent_label = agent['label']
+            newsletter.id_name = kwargs.get('id_name', '')
+            newsletter.friendly_name = kwargs.get('friendly_name', '')
+            newsletter.newsletter_config = json.dumps(agent_class.config)
+            newsletter.email_config = json.dumps(agent_class.email_config)
+            newsletter.subject = agent_class.subject
+            newsletter.body = agent_class.body
+            newsletter.message = agent_class.message
+            newsletter.cron = kwargs.get('cron')
+            newsletter.active = kwargs.get('active')
         logger.info("Tautulli Newsletters :: Updated newsletter agent: %s (newsletter_id %s)."
                     % (agent['label'], newsletter_id))
         newsletter_handler.schedule_newsletters(newsletter_id=newsletter_id)
@@ -303,8 +335,9 @@ def send_newsletter(newsletter_id=None, subject=None, body=None, message=None, n
 
 
 def blacklist_logger():
-    db = database.MonitorDatabase()
-    notifiers = db.select("SELECT newsletter_config, email_config FROM newsletters")
+    stmt = select(NewsletterModel.newsletter_config, NewsletterModel.email_config)
+    with session_scope() as session:
+        notifiers = session.execute(stmt).mappings().all()
 
     for n in notifiers:
         config = json.loads(n['newsletter_config'] or '{}')
@@ -336,13 +369,12 @@ def serve_template(template_name, **kwargs):
 def generate_newsletter_uuid():
     uuid = ''
     uuid_exists = 0
-    db = database.MonitorDatabase()
 
     while not uuid or uuid_exists:
         uuid = plexpy.generate_uuid()[:8]
-        result = db.select_single(
-            "SELECT EXISTS(SELECT uuid FROM newsletter_log WHERE uuid = ?) as uuid_exists", [uuid])
-        uuid_exists = result['uuid_exists']
+        with session_scope() as session:
+            stmt = select(NewsletterLog.id).where(NewsletterLog.uuid == uuid).limit(1)
+            uuid_exists = session.execute(stmt).scalar_one_or_none() is not None
 
     return uuid
 

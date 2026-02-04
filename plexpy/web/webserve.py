@@ -46,6 +46,7 @@ if sys.version_info >= (3, 6):
 import plexpy
 from plexpy.app import common
 from plexpy.db import datafactory
+from plexpy.db import maintenance
 from plexpy.integrations import http_handler
 from plexpy.integrations import pmsconnect
 from plexpy.services import exporter
@@ -58,7 +59,7 @@ from plexpy.services import notifiers
 from plexpy.services import users
 from plexpy.services import versioncheck
 from plexpy.config import core as config
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import cleanup
 from plexpy.integrations import plextv
 from plexpy.services import activity_pinger
 from plexpy.services import activity_processor
@@ -411,7 +412,7 @@ class WebInterface(object):
     def delete_temp_sessions(self, **kwargs):
         """ Flush out all of the temporary sessions in the database."""
 
-        result = database.delete_sessions()
+        result = cleanup.delete_sessions()
 
         if result:
             return {'result': 'success', 'message': 'Temporary sessions flushed.'}
@@ -425,7 +426,7 @@ class WebInterface(object):
     def delete_recently_added(self, **kwargs):
         """ Flush out all of the recently added items in the database."""
 
-        result = database.delete_recently_added()
+        result = cleanup.delete_recently_added()
 
         if result:
             return {'result': 'success', 'message': 'Recently added flushed.'}
@@ -1846,7 +1847,7 @@ class WebInterface(object):
     @requireAuth()
     def history(self, **kwargs):
         config = {
-            "database_is_importing": database.IS_IMPORTING,
+            "database_is_importing": False,
         }
 
         return serve_template(template_name="history.html", title="History", config=config)
@@ -1994,15 +1995,32 @@ class WebInterface(object):
         if 'start_date' in kwargs:
             start_date = helpers.split_strip(kwargs.pop('start_date', ''))
             if start_date:
-                custom_where.append(["strftime('%Y-%m-%d', datetime(started, 'unixepoch', 'localtime'))", start_date])
+                try:
+                    start_ts = int(helpers.YMD_to_timestamp(start_date))
+                except (TypeError, ValueError):
+                    start_ts = None
+                if start_ts is not None:
+                    end_ts = start_ts + 24 * 60 * 60 - 1
+                    custom_where.append(['session_history.started >', start_ts])
+                    custom_where.append(['session_history.started <', end_ts])
         if 'before' in kwargs:
             before = helpers.split_strip(kwargs.pop('before', ''))
             if before:
-                custom_where.append(["strftime('%Y-%m-%d', datetime(started, 'unixepoch', 'localtime')) <", before])
+                try:
+                    before_ts = int(helpers.YMD_to_timestamp(before)) + 24 * 60 * 60 - 1
+                except (TypeError, ValueError):
+                    before_ts = None
+                if before_ts is not None:
+                    custom_where.append(['session_history.started <', before_ts])
         if 'after' in kwargs:
             after = helpers.split_strip(kwargs.pop('after', ''))
             if after:
-                custom_where.append(["strftime('%Y-%m-%d', datetime(started, 'unixepoch', 'localtime')) >", after])
+                try:
+                    after_ts = int(helpers.YMD_to_timestamp(after))
+                except (TypeError, ValueError):
+                    after_ts = None
+                if after_ts is not None:
+                    custom_where.append(['session_history.started >', after_ts])
         if 'reference_id' in kwargs:
             reference_id = helpers.split_strip(kwargs.pop('reference_id', ''))
             if reference_id:
@@ -2152,7 +2170,7 @@ class WebInterface(object):
         data_factory = datafactory.DataFactory()
 
         if row_ids:
-            success = database.delete_session_history_rows(row_ids=row_ids)
+            success = cleanup.delete_session_history_rows(row_ids=row_ids)
 
             if success:
                 return {'result': 'success', 'message': 'Deleted history.'}
@@ -3403,9 +3421,9 @@ class WebInterface(object):
     @cherrypy.tools.json_out()
     @requireAuth(member_of("admin"))
     def backup_db(self, **kwargs):
-        """ Creates a manual backup of the plexpy.db file """
+        """ Creates a manual backup of the database """
 
-        result = database.make_backup()
+        result = maintenance.make_backup()
 
         if result:
             return {'result': 'success', 'message': 'Database backup successful.'}
@@ -3959,45 +3977,10 @@ class WebInterface(object):
                      }
             ```
         """
-        if not app:
-            return {'result': 'error', 'message': 'No app specified for import'}
-
-        if database_path:
-            database_file_name = os.path.basename(database_path)
-            database_cache_path = os.path.join(plexpy.CONFIG.CACHE_DIR, database_file_name + '.import.db')
-            logger.info("Received database file '%s' for import. Saving to cache: %s",
-                        database_file_name, database_cache_path)
-            database_path = shutil.copyfile(database_path, database_cache_path)
-
-        elif database_file:
-            database_path = os.path.join(plexpy.CONFIG.CACHE_DIR, database_file.filename + '.import.db')
-            logger.info("Received database file '%s' for import. Saving to cache: %s",
-                        database_file.filename, database_path)
-            with open(database_path, 'wb') as f:
-                while True:
-                    data = database_file.file.read(8192)
-                    if not data:
-                        break
-                    f.write(data)
-
-        if not database_path:
-            return {'result': 'error', 'message': 'No database specified for import'}
-
-        if app.lower() != 'tautulli':
-            return {'result': 'error', 'message': 'Only Tautulli database imports are supported.'}
-
-        db_check_msg = database.validate_database(database=database_path)
-        if db_check_msg == 'success':
-            threading.Thread(target=database.import_tautulli_db,
-                             kwargs={'database': database_path,
-                                     'method': method,
-                                     'backup': helpers.bool_true(backup)}).start()
-            return {'result': 'success',
-                    'message': 'Database import has started. Check the logs to monitor any problems.'}
-        else:
-            if database_file:
-                helpers.delete_file(database_path)
-            return {'result': 'error', 'message': db_check_msg}
+        return {
+            'result': 'error',
+            'message': 'SQLite database import is no longer supported. Use the SQLite migration tool instead.'
+        }
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -4025,10 +4008,6 @@ class WebInterface(object):
                      }
             ```
         """
-        if database.IS_IMPORTING:
-            return {'result': 'error',
-                    'message': 'Database import is in progress. Please wait until it is finished to import a config.'}
-
         if config_file:
             config_path = os.path.join(plexpy.CONFIG.CACHE_DIR, config_file.filename + '.import.ini')
             logger.info("Received config file '%s' for import. Saving to cache '%s'.",
@@ -4828,7 +4807,7 @@ class WebInterface(object):
             img_format = 'png'
 
         fp = '{}.{}'.format(img_hash, img_format)  # we want to be able to preview the thumbs
-        c_dir = os.path.join(plexpy.CONFIG.CACHE_DIR, 'images')
+        c_dir = os.path.abspath(os.path.join(plexpy.CONFIG.CACHE_DIR, 'images'))
         ffp = os.path.join(c_dir, fp)
 
         if not os.path.exists(c_dir):
@@ -4940,28 +4919,16 @@ class WebInterface(object):
     @requireAuth(member_of("admin"))
     @addtoapi()
     def download_database(self, **kwargs):
-        """ Download the Tautulli database file. """
-        database_file = database.FILENAME
-        database_copy = os.path.join(plexpy.CONFIG.CACHE_DIR, database_file)
-
+        """ Download the Tautulli database dump. """
         try:
-            db = database.MonitorDatabase()
-            db.connection.execute('begin immediate')
-            shutil.copyfile(plexpy.DB_FILE, database_copy)
-            db.connection.rollback()
-        except:
-            pass
-
-        # Remove tokens
-        db = database.MonitorDatabase(database_copy)
-        try:
-            db.action('UPDATE users SET user_token = NULL, server_token = NULL')
-        except:
-            logger.error('Failed to remove tokens from downloaded database.')
+            database_copy = maintenance.create_database_dump(plexpy.CONFIG.CACHE_DIR)
+        except Exception as exc:
+            logger.error('Failed to create database dump: %s', exc)
             cherrypy.response.status = 500
             return 'Error downloading database. Check the logs.'
 
-        return serve_download(database_copy, name=database_file)
+        logger.warn('Database dump is not scrubbed of tokens.')
+        return serve_download(database_copy, name=os.path.basename(database_copy))
 
     @cherrypy.expose
     @requireAuth(member_of("admin"))
@@ -6933,7 +6900,7 @@ class WebInterface(object):
                 check_auth()
 
             if 'database' in (args[:1] or kwargs.get('check')):
-                result = database.integrity_check()
+                result = maintenance.integrity_check()
                 status.update(result)
                 if result['integrity_check'] == 'ok':
                     status['message'] = 'Database ok'

@@ -16,7 +16,9 @@
 import re
 
 import plexpy
-from plexpy.db import sqlite_legacy as database
+from sqlalchemy import text
+
+from plexpy.db.engine import get_engine
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -27,7 +29,25 @@ class DataTables(object):
     """
 
     def __init__(self):
-        self.ssp_db = database.MonitorDatabase()
+        self.engine = get_engine()
+
+    def _bind_params(self, query, args):
+        if not args:
+            return query, {}
+
+        params = {}
+        for idx, value in enumerate(args, start=1):
+            param_name = f"param_{idx}"
+            query = query.replace('?', f":{param_name}", 1)
+            params[param_name] = value
+
+        return query, params
+
+    def _select(self, query, args=None):
+        query, params = self._bind_params(query, args or [])
+        with self.engine.connect() as connection:
+            result = connection.execute(text(query), params)
+            return [dict(row) for row in result.mappings().all()]
 
     def ssp_query(self,
                   table_name=None,
@@ -42,6 +62,9 @@ class DataTables(object):
                   join_tables=[],
                   join_evals=[],
                   kwargs=None):
+
+        if kwargs is None:
+            kwargs = {}
 
         if not table_name:
             logger.error('Tautulli DataTables :: No table name received.')
@@ -82,19 +105,19 @@ class DataTables(object):
         args = cw_args + cwu_args + w_args
 
         # Build the query
-        query = 'SELECT * FROM (SELECT %s FROM %s %s %s %s %s) %s %s' \
+        query = 'SELECT * FROM (SELECT %s FROM %s %s %s %s %s) AS data %s %s' \
                 % (extracted_columns['column_string'], table_name, join, c_where, group, union, where, order)
 
         # logger.debug("Query: %s" % query)
 
         # Execute the query
-        filtered = self.ssp_db.select(query, args=args)
+        filtered = self._select(query, args=args)
 
         # Remove NULL rows
         filtered = [row for row in filtered if not all(v is None for v in row.values())]
 
         # Build grand totals
-        totalcount = self.ssp_db.select('SELECT COUNT(id) as total_count from %s' % table_name)[0]['total_count']
+        totalcount = self._select('SELECT COUNT(id) as total_count from %s' % table_name)[0]['total_count']
 
         # Get draw counter
         draw_counter = int(parameters['draw'])
@@ -142,38 +165,41 @@ def build_custom_where(custom_where=[]):
 
     for w in custom_where:
         and_or = ' OR ' if w[0].endswith('OR') else ' AND '
-        w[0] = w[0].rstrip(' OR')
+        clause = w[0].rstrip(' OR')
+        is_like = clause.endswith(' LIKE')
+        if is_like:
+            clause = clause[:-5] + ' ILIKE'
 
-        if w[0].endswith(' IN') and isinstance(w[1], (list, tuple)) and len(w[1]):
-            c_where += w[0] + '(' + ','.join(['?'] * len(w[1])) + ')' + and_or
+        if clause.endswith(' IN') and isinstance(w[1], (list, tuple)) and len(w[1]):
+            c_where += clause + '(' + ','.join(['?'] * len(w[1])) + ')' + and_or
             args += w[1]
         elif isinstance(w[1], (list, tuple)) and len(w[1]):
             c_where += '('
             for w_ in w[1]:
                 if w_ is None:
-                    c_where += w[0] + ' IS NULL'
-                elif w[0].endswith(' LIKE'):
-                    c_where += w[0] + ' ?'
+                    c_where += clause + ' IS NULL'
+                elif is_like:
+                    c_where += clause + ' ?'
                     args.append(w_)
-                elif w[0].endswith('<') or w[0].endswith('>'):
-                    c_where += w[0] + '= ?'
+                elif clause.endswith('<') or clause.endswith('>'):
+                    c_where += clause + '= ?'
                     args.append(w_)
                 else:
-                    c_where += w[0] + ' = ?'
+                    c_where += clause + ' = ?'
                     args.append(w_)
                 c_where += ' OR '
             c_where = c_where.rstrip(' OR ') + ')' + and_or
         else:
             if w[1] is None:
-                c_where += w[0] + ' IS NULL'
-            elif w[0].endswith(' LIKE'):
-                c_where += w[0] + ' ?'
+                c_where += clause + ' IS NULL'
+            elif is_like:
+                c_where += clause + ' ?'
                 args.append(w[1])
-            elif w[0].endswith('<') or w[0].endswith('>'):
-                c_where += w[0] + '= ?'
+            elif clause.endswith('<') or clause.endswith('>'):
+                c_where += clause + '= ?'
                 args.append(w[1])
             else:
-                c_where += w[0] + ' = ?'
+                c_where += clause + ' = ?'
                 args.append(w[1])
 
             c_where += and_or
@@ -189,9 +215,7 @@ def build_order(order_param=[], columns=[], dt_columns=[]):
     order = ''
 
     for o in order_param:
-        sort_order = ' COLLATE NOCASE'
-        if o['dir'] == 'desc':
-            sort_order += ' DESC'
+        sort_order = ' DESC' if o['dir'] == 'desc' else ''
         # We first see if a name was sent though for the column sort.
         if dt_columns[int(o['column'])]['data']:
             # We have a name, now check if it's a valid column name for our query
@@ -225,14 +249,14 @@ def build_where(search_param='', columns=[], dt_columns=[]):
                     # We have a name, now check if it's a valid column name for our query
                     # so we don't just inject a random value
                     if any(d.lower() == s['data'].lower() for d in columns):
-                        where += s['data'] + ' LIKE ? OR '
+                        where += s['data'] + ' ILIKE ? OR '
                         args.append('%' + search_param + '%')
                     else:
                         # if we receive a bogus name, rather not search at all.
                         pass
                 # If no name exists for the column, just use the column index to search
                 else:
-                    where += columns[i] + ' LIKE ? OR '
+                    where += columns[i] + ' ILIKE ? OR '
                     args.append('%' + search_param + '%')
         if where:
             where = 'WHERE ' + where.rstrip(' OR ')
@@ -244,6 +268,8 @@ def build_where(search_param='', columns=[], dt_columns=[]):
 # The first parameter is required, the match_columns parameter is optional and will cause the function to
 # only return results if the value also exists in the match_columns 'data' field
 def extract_columns(columns=None, match_columns=None):
+    if columns is None:
+        columns = []
     columns_string = ''
     columns_literal = []
     columns_named = []

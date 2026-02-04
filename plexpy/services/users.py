@@ -23,9 +23,10 @@ import httpagentparser
 import plexpy
 from plexpy.app import common
 from plexpy.db import datatables
+from plexpy.db import cleanup
 from plexpy.services import libraries
 from plexpy.web import session
-from plexpy.db import sqlite_legacy as database
+from plexpy.db import database
 from plexpy.integrations import plextv
 from plexpy.util import helpers
 from plexpy.util import logger
@@ -58,7 +59,7 @@ def refresh_users():
                 # Only append user if libraries are shared
                 user_ids.append(helpers.cast_to_int(item['user_id']))
 
-            keys_dict = {"user_id": item.pop('user_id')}
+            keys_dict = {"user_id": helpers.cast_to_int(item.pop('user_id'))}
 
             # Check if we've set a custom avatar if so don't overwrite it.
             if keys_dict['user_id']:
@@ -122,7 +123,10 @@ class Users(object):
         if kwargs.get('user_id'):
             custom_where.append(['users.user_id', kwargs.get('user_id')])
 
-        group_by = 'session_history.reference_id' if grouping else 'session_history.id'
+        group_key = (
+            'COALESCE(session_history.reference_id, session_history.id)'
+            if grouping else 'session_history.id'
+        )
 
         columns = ["users.id AS row_id",
                    "users.user_id",
@@ -133,30 +137,28 @@ class Users(object):
                    "users.email",
                    "users.thumb AS user_thumb",
                    "users.custom_avatar_url AS custom_thumb",
-                   "COUNT(DISTINCT %s) AS plays" % group_by,
-                   "SUM(CASE WHEN session_history.stopped > 0 THEN (session_history.stopped - session_history.started) \
-                    ELSE 0 END) - SUM(CASE WHEN session_history.paused_counter IS NULL THEN 0 ELSE \
-                    session_history.paused_counter END) AS duration",
-                   "MAX(session_history.started) AS last_seen",
-                   "MAX(session_history.id) AS history_row_id",
-                   "session_history_metadata.full_title AS last_played",
-                   "session_history.ip_address",
-                   "session_history.platform",
-                   "session_history.player",
-                   "session_history.rating_key",
-                   "session_history_metadata.media_type",
-                   "session_history_metadata.thumb",
-                   "session_history_metadata.parent_thumb",
-                   "session_history_metadata.grandparent_thumb",
-                   "session_history_metadata.parent_title",
-                   "session_history_metadata.year",
-                   "session_history_metadata.media_index",
-                   "session_history_metadata.parent_media_index",
-                   "session_history_metadata.live",
-                   "session_history_metadata.added_at",
-                   "session_history_metadata.originally_available_at",
-                   "session_history_metadata.guid",
-                   "session_history_media_info.transcode_decision",
+                   "COALESCE(sh_stats.plays, 0) AS plays",
+                   "COALESCE(sh_stats.duration, 0) AS duration",
+                   "last_sh.started AS last_seen",
+                   "last_sh.id AS history_row_id",
+                   "last_shm.full_title AS last_played",
+                   "last_sh.ip_address",
+                   "last_sh.platform",
+                   "last_sh.player",
+                   "last_sh.rating_key",
+                   "last_shm.media_type",
+                   "last_shm.thumb",
+                   "last_shm.parent_thumb",
+                   "last_shm.grandparent_thumb",
+                   "last_shm.parent_title",
+                   "last_shm.year",
+                   "last_shm.media_index",
+                   "last_shm.parent_media_index",
+                   "last_shm.live",
+                   "last_shm.added_at",
+                   "last_shm.originally_available_at",
+                   "last_shm.guid",
+                   "last_shmi.transcode_decision",
                    "users.do_notify AS do_notify",
                    "users.keep_history AS keep_history",
                    "users.allow_guest AS allow_guest",
@@ -166,16 +168,34 @@ class Users(object):
             query = data_tables.ssp_query(table_name='users',
                                           columns=columns,
                                           custom_where=custom_where,
-                                          group_by=['users.user_id'],
+                                          group_by=[],
                                           join_types=['LEFT OUTER JOIN',
                                                       'LEFT OUTER JOIN',
+                                                      'LEFT OUTER JOIN',
                                                       'LEFT OUTER JOIN'],
-                                          join_tables=['session_history',
-                                                       'session_history_metadata',
-                                                       'session_history_media_info'],
-                                          join_evals=[['session_history.user_id', 'users.user_id'],
-                                                      ['session_history.id', 'session_history_metadata.id'],
-                                                      ['session_history.id', 'session_history_media_info.id']],
+                                          join_tables=[
+                                              'LATERAL (SELECT COUNT(DISTINCT %s) AS plays, '
+                                              'SUM(CASE WHEN session_history.stopped > 0 '
+                                              'THEN (session_history.stopped - session_history.started) '
+                                              'ELSE 0 END) - '
+                                              'SUM(CASE WHEN session_history.paused_counter IS NULL '
+                                              'THEN 0 ELSE session_history.paused_counter END) AS duration '
+                                              'FROM session_history '
+                                              'WHERE session_history.user_id = users.user_id) AS sh_stats' % group_key,
+                                              'LATERAL (SELECT session_history.id, session_history.rating_key, '
+                                              'session_history.started, session_history.ip_address, '
+                                              'session_history.platform, session_history.player '
+                                              'FROM session_history '
+                                              'WHERE session_history.user_id = users.user_id '
+                                              'ORDER BY session_history.started DESC, session_history.id DESC '
+                                              'LIMIT 1) AS last_sh',
+                                              'session_history_metadata AS last_shm',
+                                              'session_history_media_info AS last_shmi',
+                                          ],
+                                          join_evals=[['1', '1'],
+                                                      ['1', '1'],
+                                                      ['last_sh.id', 'last_shm.id'],
+                                                      ['last_sh.id', 'last_shmi.id']],
                                           kwargs=kwargs)
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for get_list: %s." % e)
@@ -423,20 +443,26 @@ class Users(object):
         last_seen = 'NULL'
         join = ''
         if include_last_seen:
-            last_seen = "MAX(session_history.started)"
-            join = "LEFT OUTER JOIN session_history ON users.user_id = session_history.user_id"
+            last_seen = "user_last_seen.last_seen"
+            join = (
+                "LEFT JOIN LATERAL ("
+                "SELECT MAX(session_history.started) AS last_seen "
+                "FROM session_history "
+                "WHERE session_history.user_id = users.user_id"
+                ") AS user_last_seen ON TRUE"
+            )
 
         monitor_db = database.MonitorDatabase()
 
         try:
             if str(user_id).isdigit():
                 where = "users.user_id = ?"
-                args = [user_id]
+                args = [helpers.cast_to_int(user_id)]
             elif user:
-                where = "users.username = ?"
+                where = "users.username ILIKE ?"
                 args = [user]
             elif email:
-                where = "users.email = ?"
+                where = "users.email ILIKE ?"
                 args = [email]
             else:
                 raise Exception("Missing user_id, username, or email")
@@ -447,7 +473,7 @@ class Users(object):
                     "do_notify, keep_history, deleted_user, " \
                     "allow_guest, shared_libraries, %s AS last_seen " \
                     "FROM users %s " \
-                    "WHERE %s COLLATE NOCASE" % (last_seen, join, where)
+                    "WHERE %s" % (last_seen, join, where)
             result = monitor_db.select(query, args=args)
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for get_user_details: %s." % e)
@@ -728,7 +754,7 @@ class Users(object):
             return all(success)
 
         elif str(user_id).isdigit():
-            delete_success = database.delete_user_history(user_id=user_id)
+            delete_success = cleanup.delete_user_history(user_id=user_id)
 
             if purge_only:
                 return delete_success

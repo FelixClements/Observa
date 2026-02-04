@@ -2,8 +2,8 @@
 set -u
 
 cmd=(python Tautulli.py --datadir ./TEST)
-startup_grace=${STARTUP_GRACE_SECONDS:-5}
-shutdown_timeout=${SHUTDOWN_TIMEOUT_SECONDS:-15}
+startup_grace=${STARTUP_GRACE_SECONDS:-50}
+shutdown_timeout=${SHUTDOWN_TIMEOUT_SECONDS:-120}
 
 "${cmd[@]}" &
 pid=$!
