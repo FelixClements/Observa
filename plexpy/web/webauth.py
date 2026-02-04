@@ -26,11 +26,10 @@ from urllib.parse import quote, unquote
 import cherrypy
 from hashing_passwords import check_hash
 import jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 import plexpy
-from plexpy.db.database import MonitorDatabase
-from plexpy.db.models import User
+from plexpy.db.models import User, UserLogin
 from plexpy.db.session import session_scope
 from plexpy.integrations.plextv import PlexTV
 from plexpy.services.users import Users, refresh_users
@@ -242,14 +241,22 @@ def all_of(*conditions):
 
 
 def check_rate_limit(ip_address):
-    monitor_db = MonitorDatabase()
-    result = monitor_db.select("SELECT timestamp, success FROM user_login "
-                               "WHERE ip_address = ? "
-                               "AND timestamp >= ( "
-                               "SELECT CASE WHEN MAX(timestamp) IS NULL THEN 0 ELSE MAX(timestamp) END "
-                               "FROM user_login WHERE ip_address = ? AND success = 1) "
-                               "ORDER BY timestamp DESC",
-                               [ip_address, ip_address])
+    last_success_subquery = (
+        select(func.coalesce(func.max(UserLogin.timestamp), 0))
+        .where(UserLogin.ip_address == ip_address, UserLogin.success == 1)
+        .scalar_subquery()
+    )
+
+    with session_scope() as db_session:
+        stmt = (
+            select(UserLogin.timestamp, UserLogin.success)
+            .where(
+                UserLogin.ip_address == ip_address,
+                UserLogin.timestamp >= last_success_subquery,
+            )
+            .order_by(UserLogin.timestamp.desc())
+        )
+        result = db_session.execute(stmt).mappings().all()
 
     try:
         last_timestamp = result[0]['timestamp']

@@ -19,7 +19,7 @@ from urllib.parse import parse_qsl
 
 import arrow
 import httpagentparser
-from sqlalchemy import case, delete, func, insert, select, text, update
+from sqlalchemy import case, delete, func, insert, literal, select, text, update
 
 import plexpy
 from plexpy.app import common
@@ -27,7 +27,7 @@ from plexpy.db import datatables
 from plexpy.db import cleanup
 from plexpy.db import queries
 from plexpy.db.engine import get_engine
-from plexpy.db.models import User, UserLogin
+from plexpy.db.models import SessionHistory, User, UserLogin
 from plexpy.db.session import session_scope
 from plexpy.services import libraries
 from plexpy.web import session
@@ -47,52 +47,56 @@ def refresh_users():
         return
 
     if result:
-        monitor_db = database.MonitorDatabase()
-
         # Keep track of user_id to update is_active status
         user_ids = [0]  # Local user always considered active
         new_users = []
+        with session_scope() as db_session:
+            for item in result:
+                if item.get('shared_libraries'):
+                    item['shared_libraries'] = ';'.join(item['shared_libraries'])
+                    # Only append user if libraries are shared
+                    user_ids.append(helpers.cast_to_int(item['user_id']))
+                elif item.get('server_token'):
+                    libs = libraries.Libraries().get_sections()
+                    item['shared_libraries'] = ';'.join([str(l['section_id']) for l in libs])
+                    # Only append user if libraries are shared
+                    user_ids.append(helpers.cast_to_int(item['user_id']))
 
-        for item in result:
-            if item.get('shared_libraries'):
-                item['shared_libraries'] = ';'.join(item['shared_libraries'])
-                # Only append user if libraries are shared
-                user_ids.append(helpers.cast_to_int(item['user_id']))
-            elif item.get('server_token'):
-                libs = libraries.Libraries().get_sections()
-                item['shared_libraries'] = ';'.join([str(l['section_id']) for l in libs])
-                # Only append user if libraries are shared
-                user_ids.append(helpers.cast_to_int(item['user_id']))
+                keys_dict = {"user_id": helpers.cast_to_int(item.pop('user_id'))}
 
-            keys_dict = {"user_id": helpers.cast_to_int(item.pop('user_id'))}
-
-            # Check if we've set a custom avatar if so don't overwrite it.
-            if keys_dict['user_id']:
-                avatar_urls = monitor_db.select("SELECT thumb, custom_avatar_url "
-                                                "FROM users WHERE user_id = ?",
-                                                [keys_dict['user_id']])
-                if avatar_urls:
-                    if not avatar_urls[0]['custom_avatar_url'] or \
-                            avatar_urls[0]['custom_avatar_url'] == avatar_urls[0]['thumb']:
+                # Check if we've set a custom avatar if so don't overwrite it.
+                if keys_dict['user_id']:
+                    stmt = (
+                        select(User.thumb, User.custom_avatar_url)
+                        .where(User.user_id == keys_dict['user_id'])
+                    )
+                    avatar_urls = db_session.execute(stmt).mappings().first()
+                    if avatar_urls:
+                        if not avatar_urls['custom_avatar_url'] or \
+                                avatar_urls['custom_avatar_url'] == avatar_urls['thumb']:
+                            item['custom_avatar_url'] = item['thumb']
+                    else:
                         item['custom_avatar_url'] = item['thumb']
-                else:
-                    item['custom_avatar_url'] = item['thumb']
 
-            # Check if title is the same as the username
-            if item['title'] == item['username']:
-                item['title'] = None
+                # Check if title is the same as the username
+                if item['title'] == item['username']:
+                    item['title'] = None
 
-            # Check if username is blank (Managed Users)
-            if not item['username']:
-                item['username'] = item['title']
+                # Check if username is blank (Managed Users)
+                if not item['username']:
+                    item['username'] = item['title']
 
-            result = monitor_db.upsert('users', key_dict=keys_dict, value_dict=item)
+                stmt = update(User).where(User.user_id == keys_dict['user_id']).values(**item)
+                update_result = db_session.execute(stmt)
+                if not update_result.rowcount or update_result.rowcount == 0:
+                    insert_values = {**item, **keys_dict}
+                    stmt = insert(User).values(**insert_values).returning(User.id)
+                    inserted_id = db_session.execute(stmt).scalar_one_or_none()
+                    if inserted_id is not None:
+                        new_users.append(item['username'])
 
-            if result == 'insert':
-                new_users.append(item['username'])
-
-        query = "UPDATE users SET is_active = 0 WHERE user_id NOT IN ({})".format(", ".join(["?"] * len(user_ids)))
-        monitor_db.action(query=query, args=user_ids)
+            stmt = update(User).where(User.user_id.notin_(user_ids)).values(is_active=0)
+            db_session.execute(stmt)
 
         # Add new users to logger username filter
         logger.filter_usernames(new_users)
@@ -455,41 +459,49 @@ class Users(object):
                 return default_return
 
     def get_user_details(self, user_id=None, user=None, email=None, include_last_seen=False):
-        last_seen = 'NULL'
-        join = ''
-        if include_last_seen:
-            last_seen = "user_last_seen.last_seen"
-            join = (
-                "LEFT JOIN LATERAL ("
-                "SELECT MAX(session_history.started) AS last_seen "
-                "FROM session_history "
-                "WHERE session_history.user_id = users.user_id"
-                ") AS user_last_seen ON TRUE"
+        try:
+            if include_last_seen:
+                last_seen_column = (
+                    select(func.max(SessionHistory.started))
+                    .where(SessionHistory.user_id == User.user_id)
+                    .scalar_subquery()
+                    .label('last_seen')
+                )
+            else:
+                last_seen_column = literal(None).label('last_seen')
+
+            stmt = select(
+                User.id.label('row_id'),
+                User.user_id,
+                User.username,
+                User.friendly_name,
+                User.thumb.label('user_thumb'),
+                User.custom_avatar_url.label('custom_thumb'),
+                User.email,
+                User.is_active,
+                User.is_admin,
+                User.is_home_user,
+                User.is_allow_sync,
+                User.is_restricted,
+                User.do_notify,
+                User.keep_history,
+                User.deleted_user,
+                User.allow_guest,
+                User.shared_libraries,
+                last_seen_column,
             )
 
-        monitor_db = database.MonitorDatabase()
-
-        try:
             if str(user_id).isdigit():
-                where = "users.user_id = ?"
-                args = [helpers.cast_to_int(user_id)]
+                stmt = stmt.where(User.user_id == helpers.cast_to_int(user_id))
             elif user:
-                where = "users.username ILIKE ?"
-                args = [user]
+                stmt = stmt.where(User.username.ilike(user))
             elif email:
-                where = "users.email ILIKE ?"
-                args = [email]
+                stmt = stmt.where(User.email.ilike(email))
             else:
                 raise Exception("Missing user_id, username, or email")
 
-            query = "SELECT users.id AS row_id, users.user_id, username, friendly_name, " \
-                    "thumb AS user_thumb, custom_avatar_url AS custom_thumb, " \
-                    "email, is_active, is_admin, is_home_user, is_allow_sync, is_restricted, " \
-                    "do_notify, keep_history, deleted_user, " \
-                    "allow_guest, shared_libraries, %s AS last_seen " \
-                    "FROM users %s " \
-                    "WHERE %s" % (last_seen, join, where)
-            result = monitor_db.select(query, args=args)
+            with session_scope() as db_session:
+                result = queries.fetch_mappings(db_session, stmt)
         except Exception as e:
             logger.warn("Tautulli Users :: Unable to execute database query for get_user_details: %s." % e)
             result = []

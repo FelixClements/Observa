@@ -30,18 +30,60 @@ from typing import Optional
 
 import arrow
 import musicbrainzngs
+from sqlalchemy import Integer, insert, select, update
 
 import plexpy
 from plexpy.app import common
 from plexpy.db import datafactory
+from plexpy.db import queries
 from plexpy.integrations import pmsconnect
 from plexpy.services import notifiers
 from plexpy.util import request
-from plexpy.db import database
+from plexpy.db.models import ImageHashLookup, MusicbrainzLookup
+from plexpy.db.models import NotifyLog as NotifyLogModel
+from plexpy.db.models import Notifier as NotifierModel
+from plexpy.db.models import TheMovieDbLookup, TvmazeLookup
+from plexpy.db.session import session_scope
 from plexpy.services import activity_processor
 from plexpy.services.newsletter_handler import notify as notify_newsletter
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _update_or_insert(db_session, model, key_values=None, values=None, returning_id=False):
+    values = values or {}
+    cleaned_keys = {key: value for key, value in (key_values or {}).items() if value is not None}
+    insert_values = {**values, **cleaned_keys}
+    if not insert_values:
+        return None
+
+    if cleaned_keys:
+        conditions = [getattr(model, key) == value for key, value in cleaned_keys.items()]
+        stmt = update(model).where(*conditions).values(**values)
+        result = db_session.execute(stmt)
+        if result.rowcount and result.rowcount > 0:
+            return None
+
+    stmt = insert(model).values(**insert_values)
+    if returning_id:
+        stmt = stmt.returning(model.id)
+        return db_session.execute(stmt).scalar_one_or_none()
+    db_session.execute(stmt)
+    return None
+
+
+def _optional_int(value):
+    if value is None or value == '':
+        return None
+    return helpers.cast_to_int(value)
+
+
+def _normalize_int_columns(model, data):
+    for column in model.__table__.columns:
+        if column.name not in data:
+            continue
+        if isinstance(column.type, Integer):
+            data[column.name] = _optional_int(data[column.name])
 
 
 def process_queue():
@@ -434,42 +476,59 @@ def notify(notifier_id=None, notify_action=None, stream_data=None, timeline_data
 
 
 def get_notify_state(session):
-    monitor_db = database.MonitorDatabase()
-    result = monitor_db.select("SELECT timestamp, notify_action, notifier_id "
-                               "FROM notify_log "
-                               "WHERE session_key = ? "
-                               "AND rating_key = ? "
-                               "AND user_id = ? "
-                               "ORDER BY id DESC",
-                               args=[session['session_key'], session['rating_key'], session['user_id']])
-    notify_states = []
-    for item in result:
-        notify_state = {'timestamp': item['timestamp'],
-                        'notify_action': item['notify_action'],
-                        'notifier_id': item['notifier_id']}
-        notify_states.append(notify_state)
-
-    return notify_states
+    session_key = helpers.cast_to_int(session.get('session_key'))
+    rating_key = helpers.cast_to_int(session.get('rating_key'))
+    user_id = helpers.cast_to_int(session.get('user_id'))
+    with session_scope() as db_session:
+        stmt = (
+            select(
+                NotifyLogModel.timestamp,
+                NotifyLogModel.notify_action,
+                NotifyLogModel.notifier_id,
+            )
+            .where(
+                NotifyLogModel.session_key == session_key,
+                NotifyLogModel.rating_key == rating_key,
+                NotifyLogModel.user_id == user_id,
+            )
+            .order_by(NotifyLogModel.id.desc())
+        )
+        result = queries.fetch_mappings(db_session, stmt)
+    return result
 
 
 def get_notify_state_enabled(session, notify_action, notified=True):
-    if notified:
-        timestamp_where = 'AND timestamp IS NOT NULL'
-    else:
-        timestamp_where = 'AND timestamp IS NULL'
+    notify_column = getattr(NotifierModel, notify_action, None)
+    if notify_column is None:
+        return []
 
-    monitor_db = database.MonitorDatabase()
-    result = monitor_db.select("SELECT id AS notifier_id, timestamp "
-                               "FROM notifiers "
-                               "LEFT OUTER JOIN ("
-                               "SELECT timestamp, notifier_id "
-                               "FROM notify_log "
-                               "WHERE session_key = ? "
-                               "AND rating_key = ? "
-                               "AND user_id = ? "
-                               "AND notify_action = ?) AS t ON notifiers.id = t.notifier_id "
-                               "WHERE %s = 1 %s" % (notify_action, timestamp_where),
-                               args=[session['session_key'], session['rating_key'], session['user_id'], notify_action])
+    session_key = helpers.cast_to_int(session.get('session_key'))
+    rating_key = helpers.cast_to_int(session.get('rating_key'))
+    user_id = helpers.cast_to_int(session.get('user_id'))
+
+    notify_log = (
+        select(NotifyLogModel.timestamp, NotifyLogModel.notifier_id)
+        .where(
+            NotifyLogModel.session_key == session_key,
+            NotifyLogModel.rating_key == rating_key,
+            NotifyLogModel.user_id == user_id,
+            NotifyLogModel.notify_action == notify_action,
+        )
+        .subquery()
+    )
+
+    with session_scope() as db_session:
+        stmt = (
+            select(NotifierModel.id.label('notifier_id'), notify_log.c.timestamp)
+            .select_from(NotifierModel)
+            .outerjoin(notify_log, NotifierModel.id == notify_log.c.notifier_id)
+            .where(notify_column == 1)
+        )
+        if notified:
+            stmt = stmt.where(notify_log.c.timestamp.isnot(None))
+        else:
+            stmt = stmt.where(notify_log.c.timestamp.is_(None))
+        result = queries.fetch_mappings(db_session, stmt)
 
     return result
 
@@ -477,8 +536,6 @@ def get_notify_state_enabled(session, notify_action, notified=True):
 def set_notify_state(notifier, notify_action, subject='', body='', script_args='', session=None, parameters=None):
 
     if notifier and notify_action:
-        monitor_db = database.MonitorDatabase()
-
         session = session or {}
 
         script_args = json.dumps(script_args) if script_args else None
@@ -506,25 +563,45 @@ def set_notify_state(notifier, notify_action, subject='', body='', script_args='
         elif notify_action == 'on_tokenexpired':
             values['tag'] = hashlib.sha256(plexpy.CONFIG.PMS_TOKEN.encode('utf-8')).hexdigest()[:10]
 
-        monitor_db.upsert(table_name='notify_log', key_dict=keys, value_dict=values)
-        return monitor_db.last_insert_id()
+        _normalize_int_columns(NotifyLogModel, keys)
+        _normalize_int_columns(NotifyLogModel, values)
+
+        with session_scope() as db_session:
+            return _update_or_insert(
+                db_session,
+                NotifyLogModel,
+                key_values=keys,
+                values=values,
+                returning_id=True,
+            )
     else:
         logger.error("Tautulli NotificationHandler :: Unable to set notify state.")
 
 
 def set_notify_success(notification_id):
-    keys = {'id': notification_id}
-    values = {'success': 1}
+    if not notification_id:
+        return
 
-    monitor_db = database.MonitorDatabase()
-    monitor_db.upsert(table_name='notify_log', key_dict=keys, value_dict=values)
+    with session_scope() as db_session:
+        stmt = (
+            update(NotifyLogModel)
+            .where(NotifyLogModel.id == notification_id)
+            .values(success=1)
+        )
+        db_session.execute(stmt)
 
 
 def check_nofity_tag(notify_action, tag):
-    monitor_db = database.MonitorDatabase()
-    result = monitor_db.select_single("SELECT * FROM notify_log "
-                                      "WHERE notify_action = ? AND tag = ?",
-                                      [notify_action, tag])
+    with session_scope() as db_session:
+        stmt = (
+            select(NotifyLogModel.id)
+            .where(
+                NotifyLogModel.notify_action == notify_action,
+                NotifyLogModel.tag == tag,
+            )
+            .limit(1)
+        )
+        result = db_session.execute(stmt).scalar_one_or_none()
     return bool(result)
 
 
@@ -1654,26 +1731,31 @@ def set_hash_image_info(img=None, rating_key=None, width=750, height=1000,
                   'blur': blur,
                   'fallback': fallback}
 
-        db = database.MonitorDatabase()
-        db.upsert('image_hash_lookup', key_dict=keys, value_dict=values)
+        with session_scope() as db_session:
+            _update_or_insert(db_session, ImageHashLookup, key_values=keys, values=values)
 
     return img_hash
 
 
 def get_hash_image_info(img_hash=None):
-    db = database.MonitorDatabase()
-    query = "SELECT * FROM image_hash_lookup WHERE img_hash = ?"
-    result = db.select_single(query, args=[img_hash])
+    with session_scope() as db_session:
+        stmt = select(ImageHashLookup.__table__).where(ImageHashLookup.img_hash == img_hash)
+        result = queries.fetch_mapping(db_session, stmt, default={})
     return result
 
 
 def lookup_tvmaze_by_id(rating_key=None, thetvdb_id=None, imdb_id=None, title=None):
-    db = database.MonitorDatabase()
-
     try:
-        query = "SELECT imdb_id, tvmaze_id, tvmaze_url FROM tvmaze_lookup " \
-                "WHERE rating_key = ?"
-        tvmaze_info = db.select_single(query, args=[rating_key])
+        with session_scope() as db_session:
+            stmt = (
+                select(
+                    TvmazeLookup.imdb_id,
+                    TvmazeLookup.tvmaze_id,
+                    TvmazeLookup.tvmaze_url,
+                )
+                .where(TvmazeLookup.rating_key == rating_key)
+            )
+            tvmaze_info = queries.fetch_mapping(db_session, stmt, default={})
     except Exception as e:
         logger.warn("Tautulli NotificationHandler :: Unable to execute database query for lookup_tvmaze_by_tvdb_id: %s." % e)
         return {}
@@ -1712,7 +1794,8 @@ def lookup_tvmaze_by_id(rating_key=None, thetvdb_id=None, imdb_id=None, title=No
                            'imdb_id': imdb_id,
                            'tvmaze_url': tvmaze_url,
                            'tvmaze_json': json.dumps(tvmaze_json)}
-            db.upsert(table_name='tvmaze_lookup', key_dict=keys, value_dict=tvmaze_info)
+            with session_scope() as db_session:
+                _update_or_insert(db_session, TvmazeLookup, key_values=keys, values=tvmaze_info)
 
             tvmaze_info.update(keys)
             tvmaze_info.pop('tvmaze_json')
@@ -1728,12 +1811,18 @@ def lookup_tvmaze_by_id(rating_key=None, thetvdb_id=None, imdb_id=None, title=No
 
 
 def lookup_themoviedb_by_id(rating_key=None, thetvdb_id=None, imdb_id=None, title=None, year=None, media_type=None):
-    db = database.MonitorDatabase()
-
     try:
-        query = "SELECT thetvdb_id, imdb_id, themoviedb_id, themoviedb_url FROM themoviedb_lookup " \
-                "WHERE rating_key = ?"
-        themoviedb_info = db.select_single(query, args=[rating_key])
+        with session_scope() as db_session:
+            stmt = (
+                select(
+                    TheMovieDbLookup.thetvdb_id,
+                    TheMovieDbLookup.imdb_id,
+                    TheMovieDbLookup.themoviedb_id,
+                    TheMovieDbLookup.themoviedb_url,
+                )
+                .where(TheMovieDbLookup.rating_key == rating_key)
+            )
+            themoviedb_info = queries.fetch_mapping(db_session, stmt, default={})
     except Exception as e:
         logger.warn("Tautulli NotificationHandler :: Unable to execute database query for lookup_themoviedb_by_imdb_id: %s." % e)
         return {}
@@ -1787,7 +1876,8 @@ def lookup_themoviedb_by_id(rating_key=None, thetvdb_id=None, imdb_id=None, titl
                                    'themoviedb_json': json.dumps(themoviedb_json)
                                    }
 
-                db.upsert(table_name='themoviedb_lookup', key_dict=keys, value_dict=themoviedb_info)
+                with session_scope() as db_session:
+                    _update_or_insert(db_session, TheMovieDbLookup, key_values=keys, values=themoviedb_info)
 
                 themoviedb_info.update(keys)
                 themoviedb_info.pop('themoviedb_json')
@@ -1806,19 +1896,20 @@ def get_themoviedb_info(rating_key=None, media_type=None, themoviedb_id=None):
     if media_type in ('show', 'season', 'episode'):
         media_type = 'tv'
 
-    db = database.MonitorDatabase()
-
     try:
-        query = "SELECT themoviedb_json FROM themoviedb_lookup " \
-                "WHERE rating_key = ?"
-        result = db.select_single(query, args=[rating_key])
+        with session_scope() as db_session:
+            stmt = (
+                select(TheMovieDbLookup.themoviedb_json)
+                .where(TheMovieDbLookup.rating_key == rating_key)
+            )
+            result = queries.fetch_scalar(db_session, stmt)
     except Exception as e:
         logger.warn("Tautulli NotificationHandler :: Unable to execute database query for get_themoviedb_info: %s." % e)
         return {}
 
     if result:
         try:
-            return json.loads(result['themoviedb_json'])
+            return json.loads(result)
         except:
             pass
 
@@ -1841,7 +1932,8 @@ def get_themoviedb_info(rating_key=None, media_type=None, themoviedb_id=None):
                            'themoviedb_json': json.dumps(themoviedb_json)
                            }
 
-        db.upsert(table_name='themoviedb_lookup', key_dict=keys, value_dict=themoviedb_info)
+        with session_scope() as db_session:
+            _update_or_insert(db_session, TheMovieDbLookup, key_values=keys, values=themoviedb_info)
 
         themoviedb_info.update(keys)
 
@@ -1857,12 +1949,17 @@ def get_themoviedb_info(rating_key=None, media_type=None, themoviedb_id=None):
 
 def lookup_musicbrainz_info(musicbrainz_type=None, rating_key=None, artist=None, release=None, recording=None,
                             tracks=None, tnum=None):
-    db = database.MonitorDatabase()
-
     try:
-        query = "SELECT musicbrainz_id, musicbrainz_url, musicbrainz_type FROM musicbrainz_lookup " \
-                "WHERE rating_key = ?"
-        musicbrainz_info = db.select_single(query, args=[rating_key])
+        with session_scope() as db_session:
+            stmt = (
+                select(
+                    MusicbrainzLookup.musicbrainz_id,
+                    MusicbrainzLookup.musicbrainz_url,
+                    MusicbrainzLookup.musicbrainz_type,
+                )
+                .where(MusicbrainzLookup.rating_key == rating_key)
+            )
+            musicbrainz_info = queries.fetch_mapping(db_session, stmt, default={})
     except Exception as e:
         logger.warn("Tautulli NotificationHandler :: Unable to execute database query for lookup_musicbrainz: %s." % e)
         return {}
@@ -1907,7 +2004,8 @@ def lookup_musicbrainz_info(musicbrainz_type=None, rating_key=None, artist=None,
                                 'musicbrainz_url': musicbrainz_url,
                                 'musicbrainz_type': musicbrainz_type,
                                 'musicbrainz_json': json.dumps(musicbrainz_info)}
-            db.upsert(table_name='musicbrainz_lookup', key_dict=keys, value_dict=musicbrainz_info)
+            with session_scope() as db_session:
+                _update_or_insert(db_session, MusicbrainzLookup, key_values=keys, values=musicbrainz_info)
 
             musicbrainz_info.update(keys)
             musicbrainz_info.pop('musicbrainz_json')

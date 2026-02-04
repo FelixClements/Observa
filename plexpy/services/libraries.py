@@ -18,10 +18,14 @@
 import json
 import os
 
+from sqlalchemy import insert, select, update, or_
+
 import plexpy
 from plexpy.app import common
 from plexpy.db import datatables
 from plexpy.db import cleanup
+from plexpy.db.models import LibrarySection
+from plexpy.db.session import session_scope
 from plexpy.integrations import pmsconnect
 from plexpy.services import users
 from plexpy.web import session
@@ -43,45 +47,61 @@ def refresh_libraries():
     library_sections = pmsconnect.PmsConnect().get_library_details()
 
     if library_sections:
-        monitor_db = database.MonitorDatabase()
-
         library_keys = []
         new_keys = []
 
         # Keep track of section_id to update is_active status
         section_ids = [common.LIVE_TV_SECTION_ID]  # Live TV library always considered active
 
-        for section in library_sections:
-            section_id = helpers.cast_to_int(section['section_id'])
-            section_ids.append(section_id)
+        with session_scope() as db_session:
+            for section in library_sections:
+                section_id = helpers.cast_to_int(section['section_id'])
+                section_ids.append(section_id)
 
-            section_keys = {'server_id': server_id,
-                            'section_id': section_id}
-            section_values = {'server_id': server_id,
-                              'section_id': section_id,
-                              'section_name': section['section_name'],
-                              'section_type': section['section_type'],
-                              'agent': section['agent'],
-                              'thumb': section['thumb'],
-                              'art': section['art'],
-                              'count': section['count'],
-                              'parent_count': section.get('parent_count', None),
-                              'child_count': section.get('child_count', None),
-                              'is_active': section['is_active']
-                              }
+                section_values = {'server_id': server_id,
+                                  'section_id': section_id,
+                                  'section_name': section['section_name'],
+                                  'section_type': section['section_type'],
+                                  'agent': section['agent'],
+                                  'thumb': section['thumb'],
+                                  'art': section['art'],
+                                  'count': section['count'],
+                                  'parent_count': section.get('parent_count', None),
+                                  'child_count': section.get('child_count', None),
+                                  'is_active': section['is_active']
+                                  }
 
-            result = monitor_db.upsert('library_sections', key_dict=section_keys, value_dict=section_values)
+                stmt = (
+                    update(LibrarySection)
+                    .where(
+                        LibrarySection.server_id == server_id,
+                        LibrarySection.section_id == section_id,
+                    )
+                    .values(**section_values)
+                )
+                update_result = db_session.execute(stmt)
+                if not update_result.rowcount or update_result.rowcount == 0:
+                    stmt = insert(LibrarySection).values(**section_values).returning(LibrarySection.id)
+                    inserted_id = db_session.execute(stmt).scalar_one_or_none()
+                    if inserted_id is not None:
+                        new_keys.append(section['section_id'])
 
-            library_keys.append(section['section_id'])
-
-            if result == 'insert':
-                new_keys.append(section['section_id'])
+                library_keys.append(section['section_id'])
 
         add_live_tv_library(refresh=True)
 
-        query = "UPDATE library_sections SET is_active = 0 WHERE server_id != ? OR " \
-                "section_id NOT IN ({})".format(", ".join(["?"] * len(section_ids)))
-        monitor_db.action(query=query, args=[plexpy.CONFIG.PMS_IDENTIFIER] + section_ids)
+        with session_scope() as db_session:
+            stmt = (
+                update(LibrarySection)
+                .where(
+                    or_(
+                        LibrarySection.server_id != plexpy.CONFIG.PMS_IDENTIFIER,
+                        LibrarySection.section_id.notin_(section_ids),
+                    )
+                )
+                .values(is_active=0)
+            )
+            db_session.execute(stmt)
 
         new_keys = plexpy.CONFIG.HOME_LIBRARY_CARDS + new_keys
         plexpy.CONFIG.__setattr__('HOME_LIBRARY_CARDS', new_keys)
@@ -95,36 +115,56 @@ def refresh_libraries():
 
 
 def add_live_tv_library(refresh=False):
-    monitor_db = database.MonitorDatabase()
-    result = monitor_db.select_single("SELECT * FROM library_sections "
-                                      "WHERE section_id = ? and server_id = ?",
-                                      [common.LIVE_TV_SECTION_ID, plexpy.CONFIG.PMS_IDENTIFIER])
+    with session_scope() as db_session:
+        stmt = (
+            select(LibrarySection.id)
+            .where(
+                LibrarySection.section_id == common.LIVE_TV_SECTION_ID,
+                LibrarySection.server_id == plexpy.CONFIG.PMS_IDENTIFIER,
+            )
+            .limit(1)
+        )
+        result = db_session.execute(stmt).scalar_one_or_none()
 
-    if result and not refresh or not result and refresh:
-        return
+        if result and not refresh or not result and refresh:
+            return
 
-    if not refresh:
-        logger.info("Tautulli Libraries :: Adding Live TV library to the database.")
+        if not refresh:
+            logger.info("Tautulli Libraries :: Adding Live TV library to the database.")
 
-    section_keys = {'server_id': plexpy.CONFIG.PMS_IDENTIFIER,
-                    'section_id': common.LIVE_TV_SECTION_ID}
-    section_values = {'server_id': plexpy.CONFIG.PMS_IDENTIFIER,
-                      'section_id': common.LIVE_TV_SECTION_ID,
-                      'section_name': common.LIVE_TV_SECTION_NAME,
-                      'section_type': 'live',
-                      'thumb': common.DEFAULT_LIVE_TV_THUMB,
-                      'art': common.DEFAULT_LIVE_TV_ART_FULL,
-                      'is_active': 1
-                      }
+        section_values = {'server_id': plexpy.CONFIG.PMS_IDENTIFIER,
+                          'section_id': common.LIVE_TV_SECTION_ID,
+                          'section_name': common.LIVE_TV_SECTION_NAME,
+                          'section_type': 'live',
+                          'thumb': common.DEFAULT_LIVE_TV_THUMB,
+                          'art': common.DEFAULT_LIVE_TV_ART_FULL,
+                          'is_active': 1
+                          }
 
-    result = monitor_db.upsert('library_sections', key_dict=section_keys, value_dict=section_values)
+        stmt = (
+            update(LibrarySection)
+            .where(
+                LibrarySection.server_id == plexpy.CONFIG.PMS_IDENTIFIER,
+                LibrarySection.section_id == common.LIVE_TV_SECTION_ID,
+            )
+            .values(**section_values)
+        )
+        update_result = db_session.execute(stmt)
+        if not update_result.rowcount or update_result.rowcount == 0:
+            db_session.execute(insert(LibrarySection).values(**section_values))
 
 
 def has_library_type(section_type):
-    monitor_db = database.MonitorDatabase()
-    query = "SELECT * FROM library_sections WHERE section_type = ? AND deleted_section = 0"
-    args = [section_type]
-    result = monitor_db.select_single(query=query, args=args)
+    with session_scope() as db_session:
+        stmt = (
+            select(LibrarySection.id)
+            .where(
+                LibrarySection.section_type == section_type,
+                LibrarySection.deleted_section == 0,
+            )
+            .limit(1)
+        )
+        result = db_session.execute(stmt).scalar_one_or_none()
     return bool(result)
 
 

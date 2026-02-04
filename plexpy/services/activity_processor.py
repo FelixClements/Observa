@@ -17,16 +17,15 @@ from collections import defaultdict
 import json
 
 import plexpy
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import Integer, delete, func, insert, select, update
 
 from plexpy.integrations import pmsconnect
 from plexpy.services import libraries
 from plexpy.services import users
 from plexpy.db import maintenance
-from plexpy.db import database
 from plexpy.db import queries
 from plexpy.db.models import Session as SessionModel
-from plexpy.db.models import SessionContinued
+from plexpy.db.models import SessionContinued, SessionHistory, SessionHistoryMediaInfo, SessionHistoryMetadata
 from plexpy.db.queries import time as time_queries
 from plexpy.db.session import session_scope
 from plexpy.util import helpers
@@ -37,7 +36,13 @@ class ActivityProcessor(object):
 
     def write_session(self, session=None, notify=True):
         if session:
-            db = database.MonitorDatabase()
+            def _optional_int(value):
+                if value is None or value == '':
+                    return None
+                return helpers.cast_to_int(value)
+
+            session_key = _optional_int(session.get('session_key'))
+            rating_key = _optional_int(session.get('rating_key'))
 
             values = {'session_key': session.get('session_key', ''),
                       'session_id': session.get('session_id', ''),
@@ -153,12 +158,38 @@ class ActivityProcessor(object):
                       'stopped': helpers.timestamp()
                       }
 
-            keys = {'session_key': session.get('session_key', ''),
-                    'rating_key': session.get('rating_key', '')}
+            values['session_key'] = session_key
+            values['rating_key'] = rating_key
 
-            result = db.upsert('sessions', values, keys)
+            for column in SessionModel.__table__.columns:
+                if column.name not in values:
+                    continue
+                if isinstance(column.type, Integer):
+                    values[column.name] = _optional_int(values[column.name])
 
-            if result == 'insert':
+            keys = {'session_key': session_key,
+                    'rating_key': rating_key}
+
+            cleaned_keys = {key: value for key, value in keys.items() if value is not None}
+            inserted = False
+            inserted_id = None
+
+            with session_scope() as db_session:
+                if cleaned_keys:
+                    conditions = [getattr(SessionModel, key) == value for key, value in cleaned_keys.items()]
+                    stmt = update(SessionModel).where(*conditions).values(**values)
+                    result = db_session.execute(stmt)
+                    if not result.rowcount or result.rowcount == 0:
+                        inserted = True
+                else:
+                    inserted = True
+
+                if inserted:
+                    insert_values = {**values, **cleaned_keys}
+                    stmt = insert(SessionModel).values(**insert_values).returning(SessionModel.id)
+                    inserted_id = db_session.execute(stmt).scalar_one_or_none()
+
+            if inserted:
                 # If it's our first write then time stamp it.
                 started = helpers.timestamp()
                 initial_stream = self.is_initial_stream(user_id=values['user_id'],
@@ -166,7 +197,15 @@ class ActivityProcessor(object):
                                                         media_type=values['media_type'],
                                                         started=started)
                 timestamp = {'started': started, 'initial_stream': initial_stream}
-                db.upsert('sessions', timestamp, keys)
+
+                with session_scope() as db_session:
+                    if inserted_id is not None:
+                        stmt = update(SessionModel).where(SessionModel.id == inserted_id).values(**timestamp)
+                        db_session.execute(stmt)
+                    elif cleaned_keys:
+                        conditions = [getattr(SessionModel, key) == value for key, value in cleaned_keys.items()]
+                        stmt = update(SessionModel).where(*conditions).values(**timestamp)
+                        db_session.execute(stmt)
 
                 # Check if any notification agents have notifications enabled
                 if notify:
@@ -267,8 +306,6 @@ class ActivityProcessor(object):
                 logger.debug("Tautulli ActivityProcessor :: History logging for library '%s' is disabled." % library_details['section_name'])
 
             if logging_enabled:
-                db = database.MonitorDatabase()
-
                 media_info = {}
 
                 # Fetch metadata first so we can return false if it fails
@@ -296,7 +333,6 @@ class ActivityProcessor(object):
 
                 # logger.debug("Tautulli ActivityProcessor :: Attempting to write sessionKey %s to session_history table..."
                 #              % session['session_key'])
-                keys = {'id': None}
                 values = {'started': session['started'],
                           'stopped': stopped,
                           'rating_key': session['rating_key'],
@@ -325,10 +361,9 @@ class ActivityProcessor(object):
 
                 # logger.debug("Tautulli ActivityProcessor :: Writing sessionKey %s session_history transaction..."
                 #              % session['session_key'])
-                db.upsert(table_name='session_history', key_dict=keys, value_dict=values)
-
-                # Get the last insert row id
-                last_id = db.last_insert_id()
+                with session_scope() as db_session:
+                    stmt = insert(SessionHistory).values(**values).returning(SessionHistory.id)
+                    last_id = db_session.execute(stmt).scalar_one_or_none()
                 self.group_history(last_id, session, metadata)
                 
                 # logger.debug("Tautulli ActivityProcessor :: Successfully written history item, last id for session_history is %s"
@@ -419,7 +454,16 @@ class ActivityProcessor(object):
 
                 # logger.debug("Tautulli ActivityProcessor :: Writing sessionKey %s session_history_media_info transaction..."
                 #              % session['session_key'])
-                db.upsert(table_name='session_history_media_info', key_dict=keys, value_dict=values)
+                with session_scope() as db_session:
+                    stmt = (
+                        update(SessionHistoryMediaInfo)
+                        .where(SessionHistoryMediaInfo.id == last_id)
+                        .values(**values)
+                    )
+                    result = db_session.execute(stmt)
+                    if not result.rowcount or result.rowcount == 0:
+                        insert_values = {**values, **keys}
+                        db_session.execute(insert(SessionHistoryMediaInfo).values(**insert_values))
 
                 # Write the session_history_metadata table
                 directors = ";".join(metadata['directors'])
@@ -484,7 +528,16 @@ class ActivityProcessor(object):
 
                 # logger.debug("Tautulli ActivityProcessor :: Writing sessionKey %s session_history_metadata transaction..."
                 #              % session['session_key'])
-                db.upsert(table_name='session_history_metadata', key_dict=keys, value_dict=values)
+                with session_scope() as db_session:
+                    stmt = (
+                        update(SessionHistoryMetadata)
+                        .where(SessionHistoryMetadata.id == last_id)
+                        .values(**values)
+                    )
+                    result = db_session.execute(stmt)
+                    if not result.rowcount or result.rowcount == 0:
+                        insert_values = {**values, **keys}
+                        db_session.execute(insert(SessionHistoryMetadata).values(**insert_values))
 
             # Return the session row id when the session is successfully written to the database
             return session['id']
@@ -493,21 +546,26 @@ class ActivityProcessor(object):
         new_session = prev_session = None
         prev_watched = None
 
-        db = database.MonitorDatabase()
-
         if session['live']:
             # Check if we should group the session, select the last guid from the user within the last day
             min_started = helpers.timestamp() - 24 * 60 * 60
-            query = "SELECT session_history.id, session_history_metadata.guid, session_history.reference_id " \
-                    "FROM session_history " \
-                    "JOIN session_history_metadata ON session_history.id == session_history_metadata.id " \
-                    "WHERE session_history.id <= ? AND session_history.user_id = ? " \
-                    "AND session_history.started >= ? " \
-                    "ORDER BY session_history.id DESC LIMIT 1 "
-
-            args = [last_id, session['user_id'], min_started]
-
-            result = db.select(query=query, args=args)
+            with session_scope() as db_session:
+                stmt = (
+                    select(
+                        SessionHistory.id,
+                        SessionHistoryMetadata.guid,
+                        SessionHistory.reference_id,
+                    )
+                    .join(SessionHistoryMetadata, SessionHistory.id == SessionHistoryMetadata.id)
+                    .where(
+                        SessionHistory.id <= last_id,
+                        SessionHistory.user_id == session['user_id'],
+                        SessionHistory.started >= min_started,
+                    )
+                    .order_by(SessionHistory.id.desc())
+                    .limit(1)
+                )
+                result = queries.fetch_mappings(db_session, stmt)
 
             if len(result) > 0:
                 new_session = {'id': last_id,
@@ -522,12 +580,23 @@ class ActivityProcessor(object):
 
         else:
             # Check if we should group the session, select the last two rows from the user
-            query = "SELECT id, rating_key, view_offset, reference_id FROM session_history " \
-                    "WHERE id <= ? AND user_id = ? AND rating_key = ? ORDER BY id DESC LIMIT 2 "
-
-            args = [last_id, session['user_id'], session['rating_key']]
-
-            result = db.select(query=query, args=args)
+            with session_scope() as db_session:
+                stmt = (
+                    select(
+                        SessionHistory.id,
+                        SessionHistory.rating_key,
+                        SessionHistory.view_offset,
+                        SessionHistory.reference_id,
+                    )
+                    .where(
+                        SessionHistory.id <= last_id,
+                        SessionHistory.user_id == session['user_id'],
+                        SessionHistory.rating_key == session['rating_key'],
+                    )
+                    .order_by(SessionHistory.id.desc())
+                    .limit(2)
+                )
+                result = queries.fetch_mappings(db_session, stmt)
 
             if len(result) > 1:
                 new_session = {'id': result[0]['id'],
@@ -551,8 +620,6 @@ class ActivityProcessor(object):
                     marker_first, marker_final
                 )
 
-        query = "UPDATE session_history SET reference_id = ? WHERE id = ? "
-
         # If previous session view offset less than watched threshold,
         # and new session view offset is greater,
         # then set the reference_id to the previous row,
@@ -563,19 +630,28 @@ class ActivityProcessor(object):
         ):
             if metadata:
                 logger.debug("Tautulli ActivityProcessor :: Grouping history for sessionKey %s", session['session_key'])
-            args = [prev_session['reference_id'], new_session['id']]
+            reference_id = prev_session['reference_id']
+            target_id = new_session['id']
 
         else:
             if metadata:
                 logger.debug("Tautulli ActivityProcessor :: Not grouping history for sessionKey %s", session['session_key'])
-            args = [last_id, last_id]
+            reference_id = last_id
+            target_id = last_id
 
-        db.action(query=query, args=args)
+        with session_scope() as db_session:
+            stmt = (
+                update(SessionHistory)
+                .where(SessionHistory.id == target_id)
+                .values(reference_id=reference_id)
+            )
+            db_session.execute(stmt)
 
     def get_sessions(self, user_id=None, ip_address=None):
         stmt = select(SessionModel.__table__)
 
         if str(user_id).isdigit():
+            user_id = helpers.cast_to_int(user_id)
             stmt = stmt.where(SessionModel.user_id == user_id)
             if ip_address:
                 stmt = stmt.distinct(SessionModel.ip_address)
@@ -585,6 +661,7 @@ class ActivityProcessor(object):
 
     def get_session_by_key(self, session_key=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = select(SessionModel.__table__).where(SessionModel.session_key == session_key)
                 session_data = queries.fetch_mapping(db_session, stmt, default={})
@@ -605,6 +682,7 @@ class ActivityProcessor(object):
 
     def set_session_state(self, session_key=None, state=None, **kwargs):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             values = {}
 
             if state:
@@ -632,16 +710,19 @@ class ActivityProcessor(object):
 
     def delete_session(self, session_key=None, row_id=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = delete(SessionModel).where(SessionModel.session_key == session_key)
                 db_session.execute(stmt)
         elif str(row_id).isdigit():
+            row_id = helpers.cast_to_int(row_id)
             with session_scope() as db_session:
                 stmt = delete(SessionModel).where(SessionModel.id == row_id)
                 db_session.execute(stmt)
 
     def set_session_last_paused(self, session_key=None, timestamp=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = (
                     select(SessionModel.last_paused, SessionModel.paused_counter)
@@ -679,6 +760,7 @@ class ActivityProcessor(object):
 
     def increment_session_buffer_count(self, session_key=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = (
                     update(SessionModel)
@@ -689,6 +771,7 @@ class ActivityProcessor(object):
 
     def get_session_buffer_count(self, session_key=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = (
                     select(SessionModel.buffer_count)
@@ -702,6 +785,7 @@ class ActivityProcessor(object):
 
     def set_session_buffer_trigger_time(self, session_key=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = (
                     update(SessionModel)
@@ -712,6 +796,7 @@ class ActivityProcessor(object):
 
     def get_session_buffer_trigger_time(self, session_key=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             with session_scope() as db_session:
                 stmt = (
                     select(SessionModel.buffer_last_triggered)
@@ -731,6 +816,7 @@ class ActivityProcessor(object):
 
     def increment_write_attempts(self, session_key=None):
         if str(session_key).isdigit():
+            session_key = helpers.cast_to_int(session_key)
             session = self.get_session_by_key(session_key=session_key)
             if not session:
                 return
@@ -743,6 +829,9 @@ class ActivityProcessor(object):
                 db_session.execute(stmt)
 
     def set_marker(self, session_key=None, marker_idx=None, marker_type=None):
+        if not str(session_key).isdigit():
+            return
+        session_key = helpers.cast_to_int(session_key)
         marker_args = [
             int(marker_type == 'intro'),
             int(marker_type == 'commercial'),
@@ -762,6 +851,9 @@ class ActivityProcessor(object):
             db_session.execute(stmt)
 
     def set_watched(self, session_key=None):
+        if not str(session_key).isdigit():
+            return
+        session_key = helpers.cast_to_int(session_key)
         with session_scope() as db_session:
             stmt = (
                 update(SessionModel)
@@ -815,12 +907,23 @@ class ActivityProcessor(object):
 
         logger.info("Tautulli ActivityProcessor :: Regrouping session history...")
 
-        db = database.MonitorDatabase()
-        query = (
-            "SELECT * FROM session_history "
-            "JOIN session_history_metadata ON session_history.id = session_history_metadata.id"
-        )
-        results = db.select(query)
+        with session_scope() as db_session:
+            stmt = (
+                select(
+                    SessionHistory.id,
+                    SessionHistory.user_id,
+                    SessionHistory.rating_key,
+                    SessionHistory.view_offset,
+                    SessionHistory.media_type,
+                    SessionHistoryMetadata.duration,
+                    SessionHistoryMetadata.marker_credits_first,
+                    SessionHistoryMetadata.marker_credits_final,
+                    SessionHistoryMetadata.live,
+                    SessionHistoryMetadata.guid,
+                )
+                .join(SessionHistoryMetadata, SessionHistory.id == SessionHistoryMetadata.id)
+            )
+            results = queries.fetch_mappings(db_session, stmt)
         count = len(results)
         progress = 0
 
