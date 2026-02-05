@@ -46,6 +46,30 @@ The container runs as user `tautulli` (UID/GID 1000); ensure `/config` is writab
 Tautulli runs on PostgreSQL at runtime; SQLite databases are only supported as a one-time
 migration source via the setup wizard.
 
+### Database
+
+-   PostgreSQL is required at runtime; SQLite is not supported for ongoing use.
+-   Provide connection details via environment variables or `config.ini` under `[Database]`.
+-   `docker-compose.yml` in this repo includes a Postgres 16 service and Tautulli wiring.
+
+### Configuration
+
+-   Environment variables: `TAUTULLI_DB_HOST`, `TAUTULLI_DB_PORT`, `TAUTULLI_DB_NAME`,
+    `TAUTULLI_DB_USER`, `TAUTULLI_DB_PASSWORD`, `TAUTULLI_DB_SSLMODE`,
+    `TAUTULLI_DB_POOL_SIZE`, `TAUTULLI_DB_MAX_OVERFLOW`, `TAUTULLI_DB_POOL_TIMEOUT`.
+-   `config.ini` keys (under `[Database]`): `db_host`, `db_port`, `db_name`, `db_user`,
+    `db_password`, `db_sslmode`, `db_pool_size`, `db_max_overflow`, `db_pool_timeout`.
+
+### Migration
+
+-   SQLite is supported only as a one-time migration source into Postgres.
+-   New installs initialize an empty Postgres database automatically.
+-   Existing installs must run migrations explicitly using `--migrate-db` or the setup wizard flow.
+
+### Backups
+
+-   Backups use `pg_dump`. Ensure the Postgres client tools are available in the container/host.
+
 [badge-release-master]: https://img.shields.io/github/v/release/Tautulli/Tautulli?style=flat-square
 [badge-release-master-date]: https://img.shields.io/github/release-date/Tautulli/Tautulli?style=flat-square&color=blue
 [badge-release-beta]: https://img.shields.io/github/v/release/Tautulli/Tautulli?include_prereleases&style=flat-square

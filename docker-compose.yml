@@ -1,6 +1,6 @@
 services:
   tautulli:
-    image: tautulli/tautulli:latest
+    image: ghcr.io/felixclements/tautulli:rebuild
     container_name: tautulli
     restart: unless-stopped
     ports:

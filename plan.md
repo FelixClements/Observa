@@ -161,8 +161,8 @@ Phase 7: Postgres-only cleanup
 - [x] Remove SQLite settings from config
 - [x] Update backup tooling to Postgres (pg_dump backups, dump download, integrity check)
 - [x] Update export tooling to Postgres
-- Success criteria: no sqlite3 imports remain; backups/exports work on Postgres
-- Tests: app runs without sqlite3; key features operate via ORM
+- [x] Success criteria: no sqlite3 imports remain; backups/exports work on Postgres
+- [x] Tests: app runs without sqlite3; key features operate via ORM
 - Next step: Ensure `pg_dump` is available in the container and verify `backup_db` + `download_database` in the UI/API
 
 Phase 8: Linux containers only + Python 3.15
