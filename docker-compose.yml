@@ -1,0 +1,29 @@
+services:
+  tautulli:
+    image: tautulli/tautulli:latest
+    container_name: tautulli
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    environment:
+      TAUTULLI_DB_HOST: db
+      TAUTULLI_DB_PORT: "5432"
+      TAUTULLI_DB_NAME: tautulli
+      TAUTULLI_DB_USER: tautulli
+      TAUTULLI_DB_PASSWORD: tautulli
+      TAUTULLI_DB_SSLMODE: prefer
+    volumes:
+      - ./config:/config
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    container_name: tautulli-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tautulli
+      POSTGRES_USER: tautulli
+      POSTGRES_PASSWORD: tautulli
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
