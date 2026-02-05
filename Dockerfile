@@ -32,11 +32,12 @@ RUN \
 
 RUN \
   mkdir /config && \
-  touch /config/DOCKER
+  touch /config/DOCKER && \
+  chown -R tautulli:tautulli /config
 VOLUME /config
 
+USER tautulli
 CMD [ "python", "Tautulli.py", "--datadir", "/config" ]
-ENTRYPOINT [ "./start.sh" ]
 
 EXPOSE 8181
 HEALTHCHECK --start-period=90s CMD curl -ILfks https://localhost:8181/status > /dev/null || curl -ILfs http://localhost:8181/status > /dev/null || exit 1

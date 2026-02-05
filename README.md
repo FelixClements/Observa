@@ -42,6 +42,7 @@ This project is based on code from [Headphones](https://github.com/rembo10/headp
 | Docker    | [![Docker@master][badge-docker-master]][DockerHub] <br> [![Docker Build@master][badge-docker-master-ci]][Publish Docker Master] | [![Docker@beta][badge-docker-beta]][DockerHub] <br> [![Docker Build@beta][badge-docker-beta-ci]][Publish Docker Beta] | [![Docker@nightly][badge-docker-nightly]][DockerHub] <br> [![Docker Build@nightly][badge-docker-nightly-ci]][Publish Docker Nightly] |
 
 This branch supports Docker-only deployments on Linux. Use the Docker image from [DockerHub][DockerHub].
+The container runs as user `tautulli` (UID/GID 1000); ensure `/config` is writable or override with `--user`.
 Tautulli runs on PostgreSQL at runtime; SQLite databases are only supported as a one-time
 migration source via the setup wizard.
 

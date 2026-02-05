@@ -169,7 +169,7 @@ Phase 8: Linux containers only + Python 3.15
 - Update container base:
   - `Dockerfile` (Python 3.15, gated by dependency compatibility)
 - Simplify entry script:
-  - `start.sh` (container-only execution)
+  - Docker entrypoint runs via `CMD` (no `start.sh`)
 - Verify non-container CI workflows removed in Phase 2.5
 - Update docs to container-only + Python 3.15
 - Success criteria: container runs on target Python; docs match runtime support
