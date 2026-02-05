@@ -2087,7 +2087,7 @@ class DataFactory(object):
                     SessionHistoryMediaInfo.subtitle_language,
                     SessionHistoryMediaInfo.stream_bitrate,
                     SessionHistoryMediaInfo.stream_video_full_resolution,
-                    SessionHistoryMediaInfo.quality_profile,
+                    SessionHistory.quality_profile,
                     SessionHistoryMediaInfo.stream_container_decision,
                     SessionHistoryMediaInfo.stream_container,
                     SessionHistoryMediaInfo.stream_video_decision,
@@ -2136,6 +2136,9 @@ class DataFactory(object):
             with session_scope() as db_session:
                 result = queries.fetch_mappings(db_session, stmt)
         elif session_key:
+            if not str(session_key).isdigit():
+                return None
+            session_key = helpers.cast_to_int(session_key)
             stmt = (
                 select(
                     Session.bitrate,
