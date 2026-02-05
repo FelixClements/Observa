@@ -356,7 +356,7 @@ ${next.modalIncludes()}
                 var result = $.parseJSON(xhr.responseText);
                 var msg = '';
                 if (result.update === false) {
-                    showMsg('<i class="fa fa-check"></i> ' + result.message, false, true, 2000);
+                    showMsg({ iconClass: 'fa fa-check', text: result.message }, false, true, 2000);
                 } else {
                     if (result.update === null) {
                         msg = 'You are running an unknown version of Tautulli.<br />';

@@ -235,8 +235,8 @@ libraries_list_table_options = {
         }
     },
     "preDrawCallback": function(settings) {
-        var msg = "<i class='fa fa-refresh fa-spin'></i>&nbsp; Fetching rows...";
-        showMsg(msg, false, false, 0)
+        var msg = 'Fetching rows...';
+        showMsg(msg, true, false, 0)
     },
     "rowCallback": function (row, rowData) {
         if ($.inArray(rowData['row_id'], libraries_to_delete) !== -1) {

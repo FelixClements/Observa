@@ -457,9 +457,9 @@
             var result = $.parseJSON(jqXHR.responseText);
             var msg = result.message;
             if (result.result === 'success') {
-                showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000)
+                showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000)
             } else {
-                showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true)
+                showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true)
             }
         }
 
@@ -562,7 +562,7 @@
                 var result = $.parseJSON(xhr.responseText);
                 var msg = result.msg;
                 if (result.result === 'success') {
-                    showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000);
+                    showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000);
                     window.open(result.url);
 
                     (function retrieve_token(){
@@ -574,11 +574,11 @@
                                 success: function(data) {
                                     if (data.result === 'success') {
                                         facebook_token = true;
-                                        showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000);
+                                        showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000);
                                         $('#facebook_access_token').val(data.access_token);
                                     } else if (data.result === 'error') {
                                         facebook_token = false;
-                                        showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true);
+                                        showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true);
                                     }
                                 },
                                 complete: function() {
@@ -592,7 +592,7 @@
                     })();
 
                 } else {
-                    showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true);
+                    showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true);
                 }
             }
         });
@@ -694,9 +694,9 @@
     $('#zapier_test_hook').click(function () {
         $.get('zapier_test_hook', { 'zapier_hook': $('#zapier_hook').val() }, function (data) {
             if (data.result === 'success') {
-                showMsg('<i class="fa fa-check"></i> ' + data.msg, false, true, 5000);
+                showMsg({ iconClass: 'fa fa-check', text: data.msg }, false, true, 5000);
             } else {
-                showMsg('<i class="fa fa-times"></i> ' + data.msg, false, true, 5000, true);
+                showMsg({ iconClass: 'fa fa-times', text: data.msg }, false, true, 5000, true);
             }
         });
     });
@@ -831,7 +831,7 @@
         } catch (e) {
             $('#custom_conditions_logic_error span').text(e);
             $('#custom_conditions_logic_error').show();
-            showMsg('<i class="fa fa-times"></i> Failed to save notifier. Invalid condition logic.', false, true, 5000, true);
+            showMsg({ iconClass: 'fa fa-times', text: 'Failed to save notifier. Invalid condition logic.' }, false, true, 5000, true);
         }
     }
 
@@ -863,7 +863,7 @@
     });
 
     function sendTestNotification() {
-        showMsg('<i class="fa fa-refresh fa-spin"></i>&nbsp; Sending Notification', false);
+        showMsg('Sending Notification', true, false);
         if ('${notifier["agent_name"]}' !== 'browser') {
             $.ajax({
                 url: 'send_notification',
@@ -879,9 +879,9 @@
                 async: true,
                 success: function (data) {
                     if (data.result === 'success') {
-                        showMsg('<i class="fa fa-check"></i> ' + data.message, false, true, 5000);
+                        showMsg({ iconClass: 'fa fa-check', text: data.message }, false, true, 5000);
                     } else {
-                        showMsg('<i class="fa fa-exclamation-circle"></i> ' + data.message, false, true, 5000, true);
+                        showMsg({ iconClass: 'fa fa-exclamation-circle', text: data.message }, false, true, 5000, true);
                     }
                 }
             });
@@ -893,7 +893,7 @@
                 PNotify.prototype.options.delay = $('#browser_auto_hide_delay').val() * 1000;
             }
             displayPNotify($('#test_subject').val(), $('#test_body').val());
-            showMsg('<i class="fa fa-check"></i> Notification sent.', false, true, 5000);
+            showMsg({ iconClass: 'fa fa-check', text: 'Notification sent.' }, false, true, 5000);
         }
     }
 

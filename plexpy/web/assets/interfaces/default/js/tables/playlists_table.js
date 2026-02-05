@@ -96,8 +96,8 @@ playlists_table_options = {
         });
     },
     "preDrawCallback": function(settings) {
-        var msg = "<i class='fa fa-refresh fa-spin'></i>&nbsp; Fetching rows...";
-        showMsg(msg, false, false, 0);
+        var msg = 'Fetching rows...';
+        showMsg(msg, true, false, 0);
         $('[data-toggle="tooltip"]').tooltip('destroy');
     },
     "rowCallback": function (row, rowData, rowIndex) {

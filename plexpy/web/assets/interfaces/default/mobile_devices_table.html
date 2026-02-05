@@ -126,7 +126,7 @@ DOCUMENTATION :: END
                                     verifiedDevice = true;
                                     getMobileDevicesTable();
                                     $('#api-qr-modal').modal('hide');
-                                    showMsg('<i class="fa fa-check"></i> ' + data.message, false, true, 5000, false);
+                                    showMsg({ iconClass: 'fa fa-check', text: data.message }, false, true, 5000, false);
                                 }
                             },
                             complete: function () {
@@ -159,7 +159,7 @@ DOCUMENTATION :: END
                     cancel: true
                 },
                 success: function (data) {
-                    showMsg('<i class="fa fa-times"></i> ' + data.message, false, true, 5000, false);
+                    showMsg({ iconClass: 'fa fa-times', text: data.message }, false, true, 5000, false);
                 }
             });
         }

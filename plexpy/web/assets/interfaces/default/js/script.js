@@ -78,15 +78,84 @@ function showMsg(msg, loader, timeout, ms, error) {
     } else {
         feedback.removeAttr("style");
     }
-    var message = $("<div class='msg'>" + msg + "</div>");
+
+    function isMessageObject(value) {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+            return false;
+        }
+        return Object.prototype.hasOwnProperty.call(value, 'text') ||
+            Object.prototype.hasOwnProperty.call(value, 'parts') ||
+            Object.prototype.hasOwnProperty.call(value, 'iconClass');
+    }
+
+    function appendText(container, text) {
+        if (text === undefined || text === null) {
+            return;
+        }
+        container.append(document.createTextNode(String(text)));
+    }
+
+    function appendParts(container, parts) {
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            if (part === undefined || part === null) {
+                continue;
+            }
+            if (typeof part === 'string' || typeof part === 'number') {
+                appendText(container, part);
+                continue;
+            }
+            if (part.type === 'br') {
+                container.append(document.createElement('br'));
+                continue;
+            }
+            if (part.type === 'link' && typeof part.href === 'string') {
+                var href = part.href;
+                if (/^\s*(javascript|data):/i.test(href)) {
+                    continue;
+                }
+                var link = $("<a></a>").attr('href', href);
+                appendText(link, (part.text === undefined || part.text === null) ? href : part.text);
+                container.append(link);
+            }
+        }
+    }
+
+    function hasContent(messageData) {
+        if (messageData.parts && messageData.parts.length) {
+            return true;
+        }
+        return messageData.text !== undefined && messageData.text !== null && messageData.text !== '';
+    }
+
+    var messageData = isMessageObject(msg) ? msg : { text: msg };
+    var message = $("<div class='msg'></div>");
+
     if (loader) {
-        message = $("<div class='msg'><i class='fa fa-refresh fa-spin'></i>&nbsp; " + msg + "</div>");
+        message.append($("<i></i>").addClass('fa fa-refresh fa-spin'));
+        if (hasContent(messageData) || messageData.iconClass) {
+            message.append(document.createTextNode(' '));
+        }
         feedback.css("padding", "14px 10px");
     }
+
+    if (messageData.iconClass) {
+        message.append($("<i></i>").addClass(messageData.iconClass));
+        if (hasContent(messageData)) {
+            message.append(document.createTextNode(' '));
+        }
+    }
+
+    if (messageData.parts && messageData.parts.length) {
+        appendParts(message, messageData.parts);
+    } else {
+        appendText(message, messageData.text);
+    }
+
     if (error) {
         feedback.css("background-color", "rgba(255,0,0,0.5)");
     }
-    $(feedback).html(message);
+    feedback.empty().append(message);
     feedback.fadeIn();
     if (timeout) {
         setTimeout(function () {
@@ -116,9 +185,9 @@ function confirmAjaxCall(url, msg, data, loader_msg, callback) {
                 var result = $.parseJSON(xhr.responseText);
                 var msg = result.message;
                 if (result.result == 'success') {
-                    showMsg('<i class="fa fa-check"></i>&nbsp; ' + msg, false, true, 5000);
+                    showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000);
                 } else {
-                    showMsg('<i class="fa fa-times"></i>&nbsp; ' + msg, false, true, 5000, true);
+                    showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true);
                 }
                 if (typeof callback === "function") {
                     callback(result);
