@@ -2060,6 +2060,9 @@ class DataFactory(object):
         user_id_filter = helpers.cast_to_int(session_user_id) if session_user_id else None
 
         if row_id:
+            if not str(row_id).isdigit():
+                return None
+            row_id = helpers.cast_to_int(row_id)
             stmt = (
                 select(
                     SessionHistoryMediaInfo.bitrate,
