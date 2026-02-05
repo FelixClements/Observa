@@ -8,6 +8,7 @@ cheroot==10.0.1
 cherrypy==18.10.0
 cherrypy-cors==1.7.0
 cloudinary==1.41.0
+configobj==5.0.9
 distro==1.9.0
 dnspython==2.7.0
 facebook-sdk==3.1.0
@@ -38,7 +39,6 @@ pytz==2024.2
 psycopg[binary]==3.2.4
 requests==2.32.4
 requests-oauthlib==2.0.0
-rumps==0.4.0; platform_system == "Darwin"
 simplejson==3.19.3
 six==1.16.0
 SQLAlchemy==2.0.36
@@ -52,6 +52,4 @@ websocket-client==1.8.0
 xmltodict==0.14.2
 zipp==3.21.0
 
-# configobj==5.1.0
 # sgmllib3k==1.0.0
-# git+https://github.com/JonnyWong16/infi.systray.git@develop#egg=infi.systray

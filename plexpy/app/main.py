@@ -20,20 +20,15 @@
 import os
 import sys
 
-# Ensure lib added to path, before any other imports
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir))
-sys.path.insert(0, os.path.join(_ROOT_DIR, 'lib'))
 
 
 import argparse
-import ctypes
 import datetime
 import locale
 import platformdirs
 import pytz
 import signal
-import shutil
-import threading
 import time
 import tzlocal
 
@@ -44,11 +39,6 @@ from plexpy.config import core as config
 from plexpy.util import helpers
 from plexpy.util import logger
 from plexpy.web import webstart
-
-if common.PLATFORM == 'Windows':
-    from plexpy.platform import windows
-elif common.PLATFORM == 'Darwin':
-    from plexpy.platform import macos
 
 # Register signals, such as CTRL + C
 signal.signal(signal.SIGINT, plexpy.sig_handler)
@@ -74,8 +64,6 @@ def _sync_bootstrap_globals():
         'NOFORK',
         'DOCKER',
         'DOCKER_MOUNT',
-        'SNAP',
-        'SNAP_MIGRATE',
         'FROZEN',
         'DEV',
         'DATA_DIR',
@@ -110,15 +98,6 @@ def main():
 
         # Attempt to get the system's locale settings
         language_code, encoding = locale.getlocale()
-
-        # Special handling for Windows platform
-        if sys.platform == 'win32':
-            # Get the user's current language settings on Windows
-            windll = ctypes.windll.kernel32
-            lang_id = windll.GetUserDefaultLCID()
-
-            # Map Windows language ID to locale identifier
-            language_code = locale.windows_locale.get(lang_id, '')
 
         # Get the preferred encoding
         encoding = locale.getpreferredencoding()
@@ -183,19 +162,14 @@ def main():
     if helpers.bool_true(os.getenv('TAUTULLI_DOCKER', False)):
         plexpy.DOCKER = True
         plexpy.DOCKER_MOUNT = not os.path.isfile('/config/DOCKER')
-    if helpers.bool_true(os.getenv('TAUTULLI_SNAP', False)):
-        plexpy.SNAP = True
 
     if args.dev:
         plexpy.DEV = True
         logger.debug("Tautulli is running in the dev environment.")
 
     if args.daemon:
-        if sys.platform == 'win32':
-            logger.warn("Daemonizing not supported under Windows, starting normally")
-        else:
-            plexpy.DAEMON = True
-            plexpy.QUIET = True
+        plexpy.DAEMON = True
+        plexpy.QUIET = True
 
     if args.nofork:
         plexpy.NOFORK = True
@@ -246,15 +220,6 @@ def main():
         plexpy.DATA_DIR = platformdirs.user_data_dir("Tautulli", False)
     else:
         plexpy.DATA_DIR = plexpy.PROG_DIR
-
-    # Migrate Snap data dir
-    if plexpy.SNAP:
-        snap_common = os.environ['SNAP_COMMON']
-        old_data_dir = os.path.join(snap_common, 'Tautulli')
-        if os.path.exists(old_data_dir) and os.listdir(old_data_dir):
-            plexpy.SNAP_MIGRATE = True
-            logger.info("Migrating Snap user data.")
-            shutil.move(old_data_dir, plexpy.DATA_DIR)
 
     if args.config:
         config_file = args.config
@@ -316,38 +281,12 @@ def main():
     # Try to start the server. Will exit here is address is already in use.
     webstart.start()
 
-    if common.PLATFORM == 'Windows':
-        if plexpy.CONFIG.SYS_TRAY_ICON:
-            plexpy.WIN_SYS_TRAY_ICON = windows.WindowsSystemTray()
-            plexpy.WIN_SYS_TRAY_ICON.start()
-        windows.set_startup()
-    elif common.PLATFORM == 'Darwin':
-        macos.set_startup()
-
     # Open webbrowser
     if plexpy.CONFIG.LAUNCH_BROWSER and not args.nolaunch and not plexpy.DEV:
         plexpy.launch_browser(plexpy.CONFIG.HTTP_HOST, plexpy.HTTP_PORT,
                               plexpy.HTTP_ROOT)
 
-    if common.PLATFORM == 'Darwin' and plexpy.CONFIG.SYS_TRAY_ICON:
-        if not macos.HAS_PYOBJC:
-            logger.warn("The pyobjc module is missing. Install this "
-                        "module to enable the MacOS menu bar icon.")
-            plexpy.CONFIG.SYS_TRAY_ICON = False
-
-        if plexpy.CONFIG.SYS_TRAY_ICON:
-            # MacOS menu bar icon must be run on the main thread and is blocking
-            # Start the rest of Tautulli on a new thread
-            thread = threading.Thread(target=wait)
-            thread.daemon = True
-            thread.start()
-
-            plexpy.MAC_SYS_TRAY_ICON = macos.MacOSSystemTray()
-            plexpy.MAC_SYS_TRAY_ICON.start()
-        else:
-            wait()
-    else:
-        wait()
+    wait()
 
 
 def wait():

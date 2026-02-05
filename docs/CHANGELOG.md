@@ -4,6 +4,9 @@
 
 * Other:
   * Change: Docker-only distribution. Removed Snap/installer packaging assets and relocated UI assets to `plexpy/web/assets`.
+  * Change: Linux-only runtime. Removed Windows/macOS/Snap startup paths, tray integrations, and OS X notifier support.
+  * Change: De-vendored `lib/` and rely on pip-installed dependencies in Docker builds.
+  * Change: Tautulli update notifications no longer include Windows/macOS installer URLs.
 
 ## v2.16.0 (2025-09-08)
 

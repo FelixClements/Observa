@@ -2,16 +2,11 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 import os
-import sys
 
 from alembic import context
 from sqlalchemy import create_engine, pool
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
-_LIB_DIR = os.path.join(_ROOT_DIR, 'lib')
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
-
 from plexpy.db.migrations import settings as migration_settings
 from plexpy.db.models import Base
 

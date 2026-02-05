@@ -20,7 +20,7 @@ import threading
 import zipfile
 
 from configobj import ConfigObj, ParseError
-from hashing_passwords import make_hash
+from plexpy.util.hashing_passwords import make_hash
 
 import plexpy
 from plexpy.util import helpers
@@ -386,7 +386,7 @@ def import_tautulli_config(config=None, backup=False):
     # Remove keys that should not be imported
     for key in _DO_NOT_IMPORT_KEYS:
         delattr(imported_config, key)
-    if plexpy.DOCKER or plexpy.SNAP:
+    if plexpy.DOCKER:
         for key in _DO_NOT_IMPORT_KEYS_DOCKER:
             delattr(imported_config, key)
 
@@ -689,9 +689,6 @@ class Config(object):
             self.CONFIG_VERSION = 16
 
         if self.CONFIG_VERSION == 16:
-            if plexpy.SNAP:
-                self.PLEXPY_AUTO_UPDATE = 0
-
             self.CONFIG_VERSION = 17
 
         if self.CONFIG_VERSION == 17:

@@ -485,7 +485,7 @@ def create_https_certificates(ssl_cert, ssl_key):
     except ImportError:
         logger.error("Unable to generate self-signed certificates: Missing pyOpenSSL module.")
         return False
-    from certgen import createKeyPair, createSelfSignedCertificate, TYPE_RSA
+    from plexpy.util.certgen import createKeyPair, createSelfSignedCertificate, TYPE_RSA
 
     issuer = common.PRODUCT
     serial = timestamp()

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote
 
 import cherrypy
-from hashing_passwords import check_hash
+from plexpy.util.hashing_passwords import check_hash
 import jwt
 from sqlalchemy import func, select
 

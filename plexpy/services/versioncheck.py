@@ -17,7 +17,6 @@
 
 import json
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -36,9 +35,6 @@ def runGit(args):
         git_locations = ['"' + plexpy.CONFIG.GIT_PATH + '"']
     else:
         git_locations = ['git']
-
-    if platform.system().lower() == 'darwin':
-        git_locations.append('/usr/local/git/bin/git')
 
     output = err = None
 
@@ -70,17 +66,7 @@ def runGit(args):
 
 def get_version():
 
-    if plexpy.FROZEN and common.PLATFORM == 'Windows':
-        plexpy.INSTALL_TYPE = 'windows'
-        current_version, current_branch = get_version_from_file()
-        return current_version, 'origin', current_branch
-
-    elif plexpy.FROZEN and common.PLATFORM == 'Darwin':
-        plexpy.INSTALL_TYPE = 'macos'
-        current_version, current_branch = get_version_from_file()
-        return current_version, 'origin', current_branch
-
-    elif os.path.isdir(os.path.join(plexpy.PROG_DIR, '.git')):
+    if os.path.isdir(os.path.join(plexpy.PROG_DIR, '.git')):
         plexpy.INSTALL_TYPE = 'git'
         output, err = runGit('rev-parse HEAD')
 
@@ -125,8 +111,6 @@ def get_version():
     else:
         if plexpy.DOCKER:
             plexpy.INSTALL_TYPE = 'docker'
-        elif plexpy.SNAP:
-            plexpy.INSTALL_TYPE = 'snap'
         else:
             plexpy.INSTALL_TYPE = 'source'
 
@@ -159,20 +143,14 @@ def check_update(scheduler=False, notify=False, use_cache=False):
     if not plexpy.CURRENT_VERSION:
         plexpy.UPDATE_AVAILABLE = None
     elif plexpy.COMMITS_BEHIND > 0 and \
-            (common.BRANCH in ('master', 'beta') or plexpy.SNAP or plexpy.FROZEN) and \
+            common.BRANCH in ('master', 'beta') and \
             common.RELEASE != plexpy.LATEST_RELEASE:
         plexpy.UPDATE_AVAILABLE = 'release'
     elif plexpy.COMMITS_BEHIND > 0 and \
-            not plexpy.SNAP and not plexpy.FROZEN and \
             plexpy.CURRENT_VERSION != plexpy.LATEST_VERSION:
         plexpy.UPDATE_AVAILABLE = 'commit'
     else:
         plexpy.UPDATE_AVAILABLE = False
-
-    if plexpy.WIN_SYS_TRAY_ICON:
-        plexpy.WIN_SYS_TRAY_ICON.change_tray_update_icon()
-    elif plexpy.MAC_SYS_TRAY_ICON:
-        plexpy.MAC_SYS_TRAY_ICON.change_tray_update_icon()
 
 
 def check_github(scheduler=False, notify=False, use_cache=False):
@@ -231,14 +209,13 @@ def check_github(scheduler=False, notify=False, use_cache=False):
         logger.debug("In total, %d commits behind", ahead_by)
 
         # Do not count [skip ci] commits for Docker or Snap on the nightly branch
-        if (plexpy.DOCKER or plexpy.SNAP) and plexpy.CONFIG.GIT_BRANCH == 'nightly':
+        if plexpy.DOCKER and plexpy.CONFIG.GIT_BRANCH == 'nightly':
             for commit in reversed(commits['commits']):
                 if '[skip ci]' not in commit['commit']['message']:
                     plexpy.LATEST_VERSION = commit['sha']
                     break
                 ahead_by -= 1
-            install = 'Docker container' if plexpy.DOCKER else 'Snap package'
-            logger.debug("%s %d commits behind", install, ahead_by)
+            logger.debug("Docker container %d commits behind", ahead_by)
 
         plexpy.COMMITS_BEHIND = ahead_by
     except KeyError:
@@ -281,8 +258,7 @@ def check_github(scheduler=False, notify=False, use_cache=False):
                                      'plexpy_update_commit': plexpy.LATEST_VERSION,
                                      'plexpy_update_behind': plexpy.COMMITS_BEHIND})
 
-        if scheduler and plexpy.CONFIG.PLEXPY_AUTO_UPDATE and \
-                not plexpy.DOCKER and not plexpy.SNAP and not plexpy.FROZEN:
+        if scheduler and plexpy.CONFIG.PLEXPY_AUTO_UPDATE and not plexpy.DOCKER:
             logger.info('Running automatic update.')
             plexpy.shutdown(restart=True, update=True)
 
@@ -296,7 +272,7 @@ def update():
     if not plexpy.UPDATE_AVAILABLE:
         return
 
-    if plexpy.INSTALL_TYPE in ('docker', 'snap', 'windows', 'macos'):
+    if plexpy.INSTALL_TYPE in ('docker',):
         return
 
     elif plexpy.INSTALL_TYPE == 'git':

@@ -32,7 +32,6 @@ import cherrypy
 from cherrypy.lib.static import serve_file, serve_fileobj, serve_download
 from cherrypy._cperror import NotFound
 
-from hashing_passwords import make_hash
 from mako.lookup import TemplateLookup
 import mako.template
 import mako.exceptions
@@ -67,17 +66,13 @@ from plexpy.services import newsletter_handler
 from plexpy.services import notification_handler
 from plexpy.util import helpers
 from plexpy.util import logger
+from plexpy.util.hashing_passwords import make_hash
 from plexpy.web import web_socket
 from plexpy.web import webstart
 from plexpy.web.api2 import API2
 from plexpy.util.helpers import checked, addtoapi, get_ip, create_https_certificates, build_datatables_json, sanitize_out
 from plexpy.web.session import get_session_info, get_session_user_id, allow_session_user, allow_session_library
 from plexpy.web.webauth import AuthController, requireAuth, member_of, check_auth, get_jwt_token
-if common.PLATFORM == 'Windows':
-    from plexpy.platform import windows
-elif common.PLATFORM == 'Darwin':
-    from plexpy.platform import macos
-
 
 TEMPLATE_LOOKUP = None
 
@@ -3210,7 +3205,6 @@ class WebInterface(object):
 
         # Check if we should refresh our data
         first_run = False
-        startup_changed = False
         server_changed = False
         reschedule = False
         https_changed = False
@@ -3244,10 +3238,6 @@ class WebInterface(object):
             # the use prefix is fairly nice in the html, but does not match the actual config
             kwargs[plain_config] = kwargs[use_config]
             del kwargs[use_config]
-
-        if kwargs.get('launch_startup') != plexpy.CONFIG.LAUNCH_STARTUP or \
-                kwargs.get('launch_browser') != plexpy.CONFIG.LAUNCH_BROWSER:
-            startup_changed = True
 
         # If we change any monitoring settings, make sure we reschedule tasks.
         if kwargs.get('check_github') != plexpy.CONFIG.CHECK_GITHUB or \
@@ -3314,13 +3304,6 @@ class WebInterface(object):
 
         # Write the config
         plexpy.CONFIG.write()
-
-        # Enable or disable system startup
-        if startup_changed:
-            if common.PLATFORM == 'Windows':
-                windows.set_startup()
-            elif common.PLATFORM == 'Darwin':
-                macos.set_startup()
 
         # Get new server URLs for SSL communications and get new server friendly name
         if server_changed:
@@ -3761,21 +3744,6 @@ class WebInterface(object):
             return {'result': 'success', 'msg': 'Authorization successful.', 'access_token': token}
         else:
             return {'result': 'error', 'msg': 'Failed to request authorization.'}
-
-    @cherrypy.expose
-    @requireAuth(member_of("admin"))
-    def osxnotifyregister(self, app, **kwargs):
-        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
-        from osxnotify import registerapp as osxnotify
-
-        result, msg = osxnotify.registerapp(app)
-        if result:
-            osx_notify = notifiers.OSX()
-            osx_notify.notify(subject='Registered', body='Success :-)', subtitle=result)
-            # logger.info("Registered %s, to re-register a different app, delete this app first" % result)
-        else:
-            logger.warn(msg)
-        return msg
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -4294,8 +4262,7 @@ class WebInterface(object):
                       'message': 'Tautulli is up to date.'
                       }
 
-        if plexpy.DOCKER or plexpy.SNAP or plexpy.FROZEN:
-            update['install_type'] = plexpy.INSTALL_TYPE
+        update['install_type'] = plexpy.INSTALL_TYPE
 
         return update
 
@@ -4326,7 +4293,7 @@ class WebInterface(object):
     @cherrypy.expose
     @requireAuth(member_of("admin"))
     def update(self, **kwargs):
-        if plexpy.DOCKER or plexpy.SNAP:
+        if plexpy.DOCKER:
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "home")
 
         # Show changelog after updating

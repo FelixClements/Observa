@@ -71,7 +71,6 @@ AGENT_IDS = {'growl': 0,
              'plex': 3,
              'pushbullet': 6,
              'pushover': 7,
-             'osx': 8,
              'boxcar': 9,
              'email': 10,
              'twitter': 11,
@@ -267,15 +266,6 @@ def available_notification_agents():
                'action_types': ('all',)
                }
               ]
-
-    # OSX Notifications should only be visible if it can be used
-    if OSX().validate():
-        agents.append({'label': 'macOS Notification Center',
-                       'name': 'osx',
-                       'id': AGENT_IDS['osx'],
-                       'class': OSX,
-                       'action_types': ('all',)
-                       })
 
     return agents
 
@@ -2812,108 +2802,6 @@ class NTFY(Notifier):
         return config_option
 
 
-class OSX(Notifier):
-    """
-    macOS notifications
-    """
-    NAME = 'macOS'
-    _DEFAULT_CONFIG = {'notify_app': '/Applications/Tautulli'
-                       }
-
-    def __init__(self, config=None):
-        super(OSX, self).__init__(config=config)
-
-        try:
-            self.objc = __import__("objc")
-            self.AppKit = __import__("AppKit")
-        except:
-            # logger.error("Tautulli Notifiers :: Cannot load OSX Notifications agent.")
-            pass
-
-    def validate(self):
-        try:
-            self.objc = __import__("objc")
-            self.AppKit = __import__("AppKit")
-            return True
-        except:
-            return False
-
-    def _swizzle(self, cls, SEL, func):
-        old_IMP = cls.instanceMethodForSelector_(SEL)
-
-        def wrapper(self, *args, **kwargs):
-            return func(self, old_IMP, *args, **kwargs)
-        new_IMP = self.objc.selector(wrapper, selector=old_IMP.selector,
-                                     signature=old_IMP.signature)
-        self.objc.classAddMethod(cls, SEL, new_IMP)
-
-    def _swizzled_bundleIdentifier(self, original, swizzled):
-        return 'ade.tautulli.osxnotify'
-
-    def agent_notify(self, subject='', body='', action='', **kwargs):
-
-        subtitle = kwargs.get('subtitle', '')
-        sound = kwargs.get('sound', '')
-        image = kwargs.get('image', '')
-
-        try:
-            self._swizzle(self.objc.lookUpClass('NSBundle'),
-                b'bundleIdentifier',
-                self._swizzled_bundleIdentifier)
-
-            NSUserNotification = self.objc.lookUpClass('NSUserNotification')
-            NSUserNotificationCenter = self.objc.lookUpClass('NSUserNotificationCenter')
-            NSAutoreleasePool = self.objc.lookUpClass('NSAutoreleasePool')
-
-            if not NSUserNotification or not NSUserNotificationCenter:
-                return False
-
-            pool = NSAutoreleasePool.alloc().init()
-
-            notification = NSUserNotification.alloc().init()
-            notification.setTitle_(subject)
-            if subtitle:
-                notification.setSubtitle_(subtitle)
-            if body:
-                notification.setInformativeText_(body)
-            if sound:
-                notification.setSoundName_("NSUserNotificationDefaultSoundName")
-            if image:
-                source_img = self.AppKit.NSImage.alloc().initByReferencingFile_(image)
-                notification.setContentImage_(source_img)
-                # notification.set_identityImage_(source_img)
-            notification.setHasActionButton_(False)
-
-            notification_center = NSUserNotificationCenter.defaultUserNotificationCenter()
-            notification_center.deliverNotification_(notification)
-            logger.info("Tautulli Notifiers :: {name} notification sent.".format(name=self.NAME))
-
-            del pool
-            return True
-
-        except Exception as e:
-            logger.error("Tautulli Notifiers :: {name} failed: {e}".format(name=self.NAME, e=e))
-            return False
-
-    def _return_config_options(self):
-        config_option = [{'label': 'Register Notify App',
-                          'value': self.config['notify_app'],
-                          'name': 'osx_notify_app',
-                          'description': 'Enter the path/application name to be registered with the Notification Center. '
-                                         'Default is <span class="inline-pre">/Applications/Tautulli</span>.',
-                          'input_type': 'text'
-                          },
-                         {'label': 'Register App',
-                          'value': 'Register App',
-                          'name': 'osx_notify_register',
-                          'description': 'Register Tautulli with the Notification Center.',
-                          'input_type': 'button'
-                          }
-                         ]
-
-        return config_option
-
-
 class PLEX(Notifier):
     """
     Plex Home Theater notifications
@@ -3658,7 +3546,7 @@ class SCRIPTS(Notifier):
             user_tokens = users.Users().get_tokens(user_id=user_id)
             custom_env['PLEX_USER_TOKEN'] = str(user_tokens['server_token'])
 
-        if self.pythonpath and plexpy.INSTALL_TYPE not in ('windows', 'macos'):
+        if self.pythonpath:
             custom_env['PYTHONPATH'] = os.pathsep.join([p for p in sys.path if p])
 
         env = os.environ.copy()

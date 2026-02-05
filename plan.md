@@ -187,30 +187,30 @@ Phase 9: Type safety rollout
 - Tests: type checker passes at current strictness; no runtime regressions
 
 Phase 10: Linux-only runtime + de-vendor libs (Docker builds)
-- Remove Windows/macOS/Snap runtime code:
-  - Delete OS modules: `plexpy/windows.py`, `plexpy/macos.py`
-  - Remove platform-specific imports/branches:
-    - `Tautulli.py` (Windows/macOS imports, Snap env/migration)
-    - `plexpy/webserve.py` (Windows/macOS imports)
-    - `plexpy/versioncheck.py` (install type = snap/windows/macos)
-    - `plexpy/__init__.py` (tray globals, platform-specific restart/alerts)
-    - `plexpy/notification_handler.py` (update assets for .exe/.pkg)
-    - `plexpy/notifiers.py` (remove OSX notifier agent)
-  - Update update-bar messaging in `plexpy/web/assets/interfaces/default/base.html` for Docker-only installs
-- Remove Windows/macOS/Snap packaging assets (if not already removed in Phase 2.5/8):
-  - `snap/`, `package/`, `init-scripts/init.osx`, `contrib/clean_pyc.bat`
-  - `.github/workflows/publish-snap.yml`, `.github/workflows/publish-installers.yml`, `.github/workflows/submit-winget.yml`
-  - Clean docs: `README.md`, `CHANGELOG.md`, `.gitignore`, `.dockerignore`
-- De-vendor `lib/` so deps are installed via pip:
-  - Move `lib/hashing_passwords.py` -> `plexpy/util/hashing_passwords.py`
-  - Move `lib/certgen.py` -> `plexpy/util/certgen.py`
-  - Update imports in `plexpy/webserve.py`, `plexpy/webauth.py`, `plexpy/api2.py`, `plexpy/config.py`, `plexpy/helpers.py`
-  - Remove `sys.path` manipulation in `Tautulli.py`
-  - Delete `lib/` after all imports are resolved
-  - Ensure all runtime deps are in `requirements.txt` and Docker build runs `pip install -r requirements.txt`
-- Keep client platform icons/mappings (Windows/macOS Plex clients) intact
-- Success criteria: platform-specific code removed without breaking UI mappings
-- Tests: app runs without vendored libs; pip deps install cleanly in Docker build
+- [x] Remove Windows/macOS/Snap runtime code:
+  - [x] Delete OS modules: `plexpy/platform/windows.py`, `plexpy/platform/macos.py`
+  - [x] Remove platform-specific imports/branches:
+    - [x] `Tautulli.py` (Windows/macOS imports, Snap env/migration)
+    - [x] `plexpy/web/webserve.py` (Windows/macOS imports)
+    - [x] `plexpy/services/versioncheck.py` (install type = snap/windows/macos)
+    - [x] `plexpy/__init__.py` (tray globals, platform-specific restart/alerts)
+    - [x] `plexpy/services/notification_handler.py` (update assets for .exe/.pkg)
+    - [x] `plexpy/services/notifiers.py` (remove OSX notifier agent)
+  - [x] Update update-bar messaging in `plexpy/web/assets/interfaces/default/base.html` for Docker-only installs
+- [x] Remove Windows/macOS/Snap packaging assets (if not already removed in Phase 2.5/8):
+  - [x] `snap/`, `package/`, `init-scripts/init.osx`, `contrib/clean_pyc.bat`
+  - [x] `.github/workflows/publish-snap.yml`, `.github/workflows/publish-installers.yml`, `.github/workflows/submit-winget.yml`
+  - [x] Clean docs: `README.md`, `CHANGELOG.md`, `.gitignore`, `.dockerignore`
+- [x] De-vendor `lib/` so deps are installed via pip:
+  - [x] Move `lib/hashing_passwords.py` -> `plexpy/util/hashing_passwords.py`
+  - [x] Move `lib/certgen.py` -> `plexpy/util/certgen.py`
+  - [x] Update imports in `plexpy/web/webserve.py`, `plexpy/web/webauth.py`, `plexpy/web/api2.py`, `plexpy/config/core.py`, `plexpy/util/helpers.py`
+  - [x] Remove `sys.path` manipulation in `Tautulli.py`
+  - [x] Delete `lib/` after all imports are resolved
+  - [x] Ensure all runtime deps are in `requirements.txt` and Docker build runs `pip install -r requirements.txt`
+- [x] Keep client platform icons/mappings (Windows/macOS Plex clients) intact
+- [x] Success criteria: platform-specific code removed without breaking UI mappings
+- [ ] Tests: app runs without vendored libs; pip deps install cleanly in Docker build
 
 Phase 11: ORM/Core migration (Postgres runtime, SQLite migration-only)
 - [x] Establish a query layer for Core/ORM results:

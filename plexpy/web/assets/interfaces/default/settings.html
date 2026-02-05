@@ -279,7 +279,7 @@
                                     The interval (in hours) Tautulli will check for a new update. Minimum 1, default 6.
                                 </p>
                             </div>
-                            % if not plexpy.SNAP and not plexpy.FROZEN:
+                            % if not plexpy.FROZEN:
                             <div class="checkbox">
                                 <label>
                                     <input type="checkbox" id="plexpy_auto_update" name="plexpy_auto_update" value="1" ${config['plexpy_auto_update']} ${docker_setting}> Update Automatically ${docker_msg | n}
@@ -534,29 +534,6 @@
                         </div>
 
                         <p class="help-block">Note: Web interface changes require a restart.</p>
-                        % if common.PLATFORM in ('Windows', 'Darwin'):
-                        <%
-                            tray = {'Windows': 'System Tray', 'Darwin': 'Menu Bar'}
-                            tray_disabled = tray_disabled_msg = ''
-                            if common.PLATFORM == 'Darwin':
-                                from plexpy.platform.macos import HAS_PYOBJC
-                                if not HAS_PYOBJC:
-                                    tray_disabled = 'disabled'
-                                    tray_disabled_msg = '<span class="setting-message small">(Missing pyobjc module)</span>'
-                        %>
-                        <div class="checkbox">
-                            <label>
-                                <input type="checkbox" class="http-settings" name="sys_tray_icon" id="sys_tray_icon" value="1" ${config['sys_tray_icon']} ${tray_disabled}> Enable ${tray[common.PLATFORM]} Icon ${tray_disabled_msg | n}
-                            </label>
-                            <p class="help-block">Show Tautulli shortcut in the ${tray[common.PLATFORM].lower()}.</p>
-                        </div>
-                        <div class="checkbox">
-                            <label>
-                                <input type="checkbox" name="launch_startup" id="launch_startup" value="1" ${config['launch_startup']}> Launch at System Startup
-                            </label>
-                            <p class="help-block">Start Tautulli automatically after Login.</p>
-                        </div>
-                        % endif
                         <div class="checkbox">
                             <label>
                                 <input type="checkbox" name="launch_browser" id="launch_browser" value="1" ${config['launch_browser']}> Launch Browser on Startup

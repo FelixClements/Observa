@@ -8,11 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LIB_PATH = REPO_ROOT / "lib"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-if str(LIB_PATH) not in sys.path:
-    sys.path.insert(0, str(LIB_PATH))
 
 from plexpy.db.engine import create_engine_from_config
 from plexpy.db.session import init_session_factory, session_scope

@@ -535,6 +535,10 @@ class ActivityProcessor(object):
                           'marker_credits_final': marker_credits_final
                           }
 
+                for column in SessionHistoryMetadata.__table__.columns:
+                    if column.name in values and isinstance(column.type, Integer):
+                        values[column.name] = _optional_int(values[column.name])
+
                 # logger.debug("Tautulli ActivityProcessor :: Writing sessionKey %s session_history_metadata transaction..."
                 #              % session['session_key'])
                 with session_scope() as db_session:

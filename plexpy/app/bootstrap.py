@@ -13,12 +13,10 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-import ctypes
 import datetime
 import os
 import queue
 import sys
-import subprocess
 import threading
 import uuid
 
@@ -76,8 +74,6 @@ PIDFILE = None
 NOFORK = False
 DOCKER = False
 DOCKER_MOUNT = False
-SNAP = False
-SNAP_MIGRATE = False
 FROZEN = False
 
 SCHED = None
@@ -119,9 +115,6 @@ PLEX_REMOTE_ACCESS_UP = None
 
 TRACKER = None
 
-WIN_SYS_TRAY_ICON = None
-MAC_SYS_TRAY_ICON = None
-
 SYS_TIMEZONE = None
 SYS_UTC_OFFSET = None
 
@@ -159,18 +152,6 @@ def initialize(config_file):
         if _INITIALIZED:
             return False
 
-        if SNAP_MIGRATE:
-            snap_common = os.environ['SNAP_COMMON']
-            old_data_dir = os.path.join(snap_common, 'Tautulli')
-            CONFIG.HTTPS_CERT = CONFIG.HTTPS_CERT.replace(old_data_dir, DATA_DIR)
-            CONFIG.HTTPS_CERT_CHAIN = CONFIG.HTTPS_CERT_CHAIN.replace(old_data_dir, DATA_DIR)
-            CONFIG.HTTPS_KEY = CONFIG.HTTPS_KEY.replace(old_data_dir, DATA_DIR)
-            CONFIG.LOG_DIR = CONFIG.LOG_DIR.replace(old_data_dir, DATA_DIR)
-            CONFIG.BACKUP_DIR = CONFIG.BACKUP_DIR.replace(old_data_dir, DATA_DIR)
-            CONFIG.CACHE_DIR = CONFIG.CACHE_DIR.replace(old_data_dir, DATA_DIR)
-            CONFIG.EXPORT_DIR = CONFIG.EXPORT_DIR.replace(old_data_dir, DATA_DIR)
-            CONFIG.NEWSLETTER_DIR = CONFIG.NEWSLETTER_DIR.replace(old_data_dir, DATA_DIR)
-
         if CONFIG.HTTP_PORT < 21 or CONFIG.HTTP_PORT > 65535:
             logger.warn("HTTP_PORT out of bounds: 21 < %s < 65535", CONFIG.HTTP_PORT)
             CONFIG.HTTP_PORT = 8181
@@ -198,8 +179,6 @@ def initialize(config_file):
 
         if DOCKER:
             build = '[Docker] '
-        elif SNAP:
-            build = '[Snap] '
         elif FROZEN:
             build = '[Bundle] '
         else:
@@ -690,12 +669,8 @@ def shutdown(restart=False, update=False, checkout=False, reset=False):
         else:
             logger.info("Restarting Tautulli with %s", args)
 
-        # os.execv fails with spaced names on Windows
-        # https://bugs.python.org/issue19066
         if NOFORK:
             pass
-        elif common.PLATFORM in ('Windows', 'Darwin'):
-            subprocess.Popen(args, cwd=os.getcwd())
         else:
             os.execv(exe, args)
 
@@ -703,11 +678,6 @@ def shutdown(restart=False, update=False, checkout=False, reset=False):
         logger.info("Tautulli is shutting down...")
 
     logger.shutdown()
-
-    if WIN_SYS_TRAY_ICON:
-        WIN_SYS_TRAY_ICON.shutdown()
-    elif MAC_SYS_TRAY_ICON:
-        MAC_SYS_TRAY_ICON.shutdown()
 
     os._exit(0)
 
@@ -801,9 +771,4 @@ def get_tautulli_info():
 
 
 def alert_message(msg, title='Tautulli Startup Error'):
-    if common.PLATFORM == 'Windows':
-        ctypes.windll.user32.MessageBoxW(0, str(msg), str(title), 0)
-    elif common.PLATFORM == 'Darwin':
-        applescript = 'display dialog "%s" with title "%s"' \
-                      'with icon caution buttons {"OK"}' % (msg, title)
-        os.system("osascript -e '%s'" % applescript)
+    sys.stderr.write("{}: {}\n".format(title, msg))
