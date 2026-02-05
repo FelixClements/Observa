@@ -1,10 +1,10 @@
-# Tautulli (Fork)
+# Observa
 
-A Python web application for monitoring, analytics, and notifications for
+Observa is a Python web application for monitoring, analytics, and notifications for
 [Plex Media Server](https://plex.tv).
 
-This fork focuses on a modernized, container-only deployment model while keeping
-feature parity with the upstream project wherever possible.
+This is a fork of Tautulli that focuses on a modernized, container-only deployment
+model while keeping feature parity with upstream wherever possible.
 
 ## What is different in this fork
 
@@ -31,7 +31,7 @@ Most features match upstream Tautulli. Highlights include:
 
 ## Preview
 
-![Tautulli Homepage](https://tautulli.com/images/screenshots/activity-compressed.jpg?v=2)
+![Observa Homepage](https://tautulli.com/images/screenshots/activity-compressed.jpg?v=2)
 
 ## Installation (Docker only)
 
@@ -44,11 +44,11 @@ or override with `--user`.
 -   PostgreSQL is required at runtime.
 -   Provide connection details via environment variables or `config.ini` under
     `[Database]`.
--   `docker-compose.yml` includes a Postgres 16 service and wiring for Tautulli.
+-   `docker-compose.yml` includes a Postgres 16 service and wiring for Observa.
 
 ### Configuration
 
--   Environment variables: `TAUTULLI_DB_HOST`, `TAUTULLI_DB_PORT`, `TAUTULLI_DB_NAME`,
+-   Environment variables (legacy names): `TAUTULLI_DB_HOST`, `TAUTULLI_DB_PORT`, `TAUTULLI_DB_NAME`,
     `TAUTULLI_DB_USER`, `TAUTULLI_DB_PASSWORD`, `TAUTULLI_DB_SSLMODE`,
     `TAUTULLI_DB_POOL_SIZE`, `TAUTULLI_DB_MAX_OVERFLOW`, `TAUTULLI_DB_POOL_TIMEOUT`.
 -   `config.ini` keys (under `[Database]`): `db_host`, `db_port`, `db_name`, `db_user`,
@@ -71,7 +71,8 @@ See `docs/architecture.md` for the updated project structure and runtime flow.
 
 ## Support
 
-Open issues and feature requests in this repository.
+Open issues and feature requests in this repository:
+https://github.com/FelixClements/Observa
 
 ## License
 

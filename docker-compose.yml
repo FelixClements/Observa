@@ -1,16 +1,16 @@
 services:
-  tautulli:
-    image: ghcr.io/felixclements/tautulli:rebuild
-    container_name: tautulli
+  observa:
+    image: ghcr.io/felixclements/observa:main
+    container_name: observa
     restart: unless-stopped
     ports:
       - "8181:8181"
     environment:
       TAUTULLI_DB_HOST: db
       TAUTULLI_DB_PORT: "5432"
-      TAUTULLI_DB_NAME: tautulli
-      TAUTULLI_DB_USER: tautulli
-      TAUTULLI_DB_PASSWORD: tautulli
+      TAUTULLI_DB_NAME: observa
+      TAUTULLI_DB_USER: observa
+      TAUTULLI_DB_PASSWORD: observa
       TAUTULLI_DB_SSLMODE: prefer
     volumes:
       - ./config:/config
@@ -19,11 +19,11 @@ services:
 
   db:
     image: postgres:16
-    container_name: tautulli-db
+    container_name: observa-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: tautulli
-      POSTGRES_USER: tautulli
-      POSTGRES_PASSWORD: tautulli
+      POSTGRES_DB: observa
+      POSTGRES_USER: observa
+      POSTGRES_PASSWORD: observa
     volumes:
       - ./postgres:/var/lib/postgresql/data

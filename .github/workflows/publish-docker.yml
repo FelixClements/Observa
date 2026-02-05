@@ -38,7 +38,7 @@ jobs:
           fi
           echo "commit=${GITHUB_SHA}" >> $GITHUB_OUTPUT
           echo "docker_platforms=linux/amd64" >> $GITHUB_OUTPUT
-          echo "docker_image=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          echo "docker_image=ghcr.io/felixclements/observa" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
