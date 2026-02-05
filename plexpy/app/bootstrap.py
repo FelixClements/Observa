@@ -224,12 +224,56 @@ def initialize(config_file):
 
         logger.info("Checking database migrations...")
         try:
-            migration_manager.check_or_initialize(config=CONFIG)
+            migration_state = migration_manager.get_migration_state(config=CONFIG)
         except Exception as e:
             logger.error("Database migration check failed: %s" % e)
-            raise SystemExit(
-                "Database migrations are required. Run Tautulli with --migrate-db to apply them."
+            raise SystemExit("Database migration check failed. See logs for details.")
+
+        if migration_state.state == 'empty':
+            try:
+                migration_manager.check_or_initialize(config=CONFIG)
+            except Exception as e:
+                logger.error("Database initialization failed: %s" % e)
+                raise SystemExit("Database initialization failed. See logs for details.")
+        elif migration_state.state == 'up-to-date':
+            pass
+        elif migration_state.state == 'needs-upgrade':
+            logger.info(
+                "Database schema upgrade required (current=%s, head=%s).",
+                migration_state.current_rev,
+                migration_state.head_rev,
             )
+
+            if not maintenance.has_pg_restore():
+                logger.error("Database migration requires pg_restore in PATH.")
+                raise SystemExit("Database migration requires pg_restore (install it and retry).")
+
+            backup_path = maintenance.make_migration_backup()
+            if not backup_path:
+                raise SystemExit("Database migration aborted: failed to create backup.")
+
+            logger.info(
+                "Database backup created at %s. Verify the upgrade and delete it when ready.",
+                backup_path,
+            )
+
+            try:
+                migration_manager.migrate_database(config=CONFIG)
+            except Exception as e:
+                logger.error("Database migration failed: %s" % e)
+                logger.info("Attempting to restore database from backup...")
+                restored = maintenance.restore_backup(backup_path, config=CONFIG)
+                if restored:
+                    logger.info("Database restored from backup: %s", backup_path)
+                else:
+                    logger.error("Database restore failed. Backup remains at %s", backup_path)
+                raise SystemExit("Database migration failed. See logs for details.")
+
+            logger.info("Database migrations applied successfully.")
+        else:
+            message = migration_state.message or "Database migrations are required."
+            logger.error("Database migration check failed: %s", message)
+            raise SystemExit(message)
 
         # Perform upgrades
         logger.info("Checking if configuration upgrades are required...")

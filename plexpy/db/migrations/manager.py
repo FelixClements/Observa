@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Optional
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from alembic.script.revision import RangeNotAncestorError, ResolutionError
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
@@ -24,6 +26,14 @@ _ALEMBIC_INI = os.path.join(_PROJECT_ROOT, 'alembic.ini')
 
 class MigrationError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class MigrationState:
+    state: str
+    current_rev: Optional[str]
+    head_rev: Optional[str]
+    message: Optional[str] = None
 
 
 def _alembic_config() -> AlembicConfig:
@@ -73,31 +83,82 @@ def upgrade_head(url: URL) -> None:
         command.upgrade(config, 'head')
 
 
-def check_or_initialize(config=None, config_path: Optional[str] = None) -> str:
+def get_migration_state(config=None, config_path: Optional[str] = None) -> MigrationState:
     url = _resolve_database_url(config=config, config_path=config_path)
     head_rev = get_head_revision()
     if head_rev is None:
         raise MigrationError('No Alembic revisions found. Verify migration scripts are present.')
 
     if is_database_empty(url):
-        LOGGER.info('Database is empty; initializing schema via Alembic.')
-        upgrade_head(url)
-        return 'initialized'
+        return MigrationState(state='empty', current_rev=None, head_rev=head_rev)
 
     current_rev = get_current_revision(url)
     if current_rev is None:
-        raise MigrationError(
-            'Database schema is not under Alembic control. Run Tautulli with --migrate-db '
-            'to initialize migrations.'
+        return MigrationState(
+            state='uncontrolled',
+            current_rev=None,
+            head_rev=head_rev,
+            message=(
+                'Database schema is not under Alembic control. Run Tautulli with --migrate-db '
+                'to initialize migrations.'
+            ),
         )
 
-    if current_rev != head_rev:
-        raise MigrationError(
-            f'Database schema is not at head (current={current_rev}, head={head_rev}). '
+    if current_rev == head_rev:
+        return MigrationState(state='up-to-date', current_rev=current_rev, head_rev=head_rev)
+
+    script = ScriptDirectory.from_config(_alembic_config())
+    try:
+        script.get_revision(current_rev)
+    except ResolutionError:
+        return MigrationState(
+            state='unknown',
+            current_rev=current_rev,
+            head_rev=head_rev,
+            message=(
+                'Database schema revision %s is not recognized by this Tautulli version.'
+                % current_rev
+            ),
+        )
+
+    try:
+        list(script.iterate_revisions(head_rev, current_rev))
+    except RangeNotAncestorError:
+        return MigrationState(
+            state='ahead',
+            current_rev=current_rev,
+            head_rev=head_rev,
+            message=(
+                'Database schema revision %s is newer than this Tautulli version (head=%s). '
+                'Update Tautulli to match the database schema.'
+                % (current_rev, head_rev)
+            ),
+        )
+
+    return MigrationState(
+        state='needs-upgrade',
+        current_rev=current_rev,
+        head_rev=head_rev,
+        message=(
+            'Database schema is not at head (current=%s, head=%s). '
             'Run Tautulli with --migrate-db to apply migrations.'
-        )
+            % (current_rev, head_rev)
+        ),
+    )
 
-    return 'up-to-date'
+
+def check_or_initialize(config=None, config_path: Optional[str] = None) -> str:
+    state = get_migration_state(config=config, config_path=config_path)
+    if state.state == 'empty':
+        LOGGER.info('Database is empty; initializing schema via Alembic.')
+        url = _resolve_database_url(config=config, config_path=config_path)
+        upgrade_head(url)
+        return 'initialized'
+
+    if state.state == 'up-to-date':
+        return 'up-to-date'
+
+    raise MigrationError(state.message or 'Database migrations are required.')
 
 
 def migrate_database(config=None, config_path: Optional[str] = None) -> None:
