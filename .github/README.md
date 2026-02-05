@@ -1,56 +1,50 @@
-# Tautulli
+# Tautulli (Fork)
 
-A python based web application for monitoring, analytics and notifications for 
+A Python web application for monitoring, analytics, and notifications for
 [Plex Media Server](https://plex.tv).
 
-This project is based on code from [Headphones](https://github.com/rembo10/headphones).
+This fork focuses on a modernized, container-only deployment model while keeping
+feature parity with the upstream project wherever possible.
+
+## What is different in this fork
+
+-   **Docker-only, Linux-only runtime.** All non-container installers and
+    platform-specific runtime code paths have been removed.
+-   **PostgreSQL-only runtime.** SQLite is supported only as a one-time migration
+    source for existing installs.
+-   **SQLAlchemy 2.x + Alembic migrations.** Schema changes are managed via
+    migrations and validated against ORM metadata.
+-   **De-vendored dependencies.** Runtime libraries are installed via `pip` and
+    tracked in `requirements.txt`.
+-   **Reorganized codebase.** Application modules are grouped under `plexpy/`
+    subpackages (web, services, db, config, util) for clearer boundaries.
 
 ## Features
 
--   Responsive web design viewable on desktop, tablet and mobile web browsers.
--   Themed to complement Plex/Web.
--   Easy configuration setup (no separate web server required).
--   Monitor current Plex Media Server activity.
--   Fully customizable notifications for stream activity and recently added media.
--   Top statistics on home page with configurable duration and measurement metric.
--   Global watching history with search/filtering & dynamic column sorting.
--   Full user list with general information and comparison stats.
--   Individual user information including devices IP addresses.
--   Complete library statistics and media file information.
--   Rich analytics presented using Highcharts graphing.
--   Beautiful content information pages.
--   Full sync list data on all users syncing items from your library.
--   And many more!!
+Most features match upstream Tautulli. Highlights include:
+
+-   Responsive web UI for desktop, tablet, and mobile.
+-   Current Plex Media Server activity monitoring.
+-   Custom notifications for streams and recently added media.
+-   Home page stats, global history, user comparisons, and library analytics.
+-   Highcharts-based graphs and rich media detail pages.
 
 ## Preview
 
-[Full preview gallery available on our website][Tautulli]
-
 ![Tautulli Homepage](https://tautulli.com/images/screenshots/activity-compressed.jpg?v=2)
 
-## Installation
+## Installation (Docker only)
 
-[![Docker Pulls][badge-docker-pulls]][DockerHub]
-[![Docker Stars][badge-docker-stars]][DockerHub]
-
-[badge-docker-pulls]: https://img.shields.io/docker/pulls/tautulli/tautulli?style=flat-square
-[badge-docker-stars]: https://img.shields.io/docker/stars/tautulli/tautulli?style=flat-square
-
-| Status | Branch: `master` | Branch: `beta` | Branch: `nightly` |
-| --- | --- | --- | --- |
-| Release   | [![Release@master][badge-release-master]][Releases Latest] <br> [![Release Date@master][badge-release-master-date]][Releases Latest] | [![Release@beta][badge-release-beta]][Releases] <br> [![Commits@beta][badge-release-beta-commits]][Commits Beta] | [![Last Commits@nightly][badge-release-nightly-last-commit]][commits Nightly] <br> [![Commits@nightly][badge-release-nightly-commits]][Commits Nightly] |
-| Docker    | [![Docker@master][badge-docker-master]][DockerHub] <br> [![Docker Build@master][badge-docker-master-ci]][Publish Docker Master] | [![Docker@beta][badge-docker-beta]][DockerHub] <br> [![Docker Build@beta][badge-docker-beta-ci]][Publish Docker Beta] | [![Docker@nightly][badge-docker-nightly]][DockerHub] <br> [![Docker Build@nightly][badge-docker-nightly-ci]][Publish Docker Nightly] |
-
-This branch supports Docker-only deployments on Linux. Use the Docker image from [DockerHub][DockerHub].
-The container runs as user `tautulli` (UID/GID 1000); ensure `/config` is writable or override with `--user`.
-Tautulli runs on PostgreSQL at runtime; SQLite databases are only supported as a one-time
-migration source via the setup wizard.
+Use the `docker-compose.yml` in this repo or run the container directly.
+The container runs as user `tautulli` (UID/GID 1000); ensure `/config` is writable
+or override with `--user`.
 
 ### Database
 
--   PostgreSQL is required at runtime; SQLite is not supported for ongoing use.
--   Provide connection details via environment variables or `config.ini` under `[Database]`.
--   `docker-compose.yml` in this repo includes a Postgres 16 service and Tautulli wiring.
+-   PostgreSQL is required at runtime.
+-   Provide connection details via environment variables or `config.ini` under
+    `[Database]`.
+-   `docker-compose.yml` includes a Postgres 16 service and wiring for Tautulli.
 
 ### Configuration
 
@@ -64,98 +58,26 @@ migration source via the setup wizard.
 
 -   SQLite is supported only as a one-time migration source into Postgres.
 -   New installs initialize an empty Postgres database automatically.
--   Existing installs must run migrations explicitly using `--migrate-db` or the setup wizard flow.
+-   Existing installs must run migrations explicitly using `--migrate-db`.
 
 ### Backups
 
--   Backups use `pg_dump`. Ensure the Postgres client tools are available in the container/host.
+-   Backups use `pg_dump`. Ensure the Postgres client tools are available in the
+    container/host.
 
-[badge-release-master]: https://img.shields.io/github/v/release/Tautulli/Tautulli?style=flat-square
-[badge-release-master-date]: https://img.shields.io/github/release-date/Tautulli/Tautulli?style=flat-square&color=blue
-[badge-release-beta]: https://img.shields.io/github/v/release/Tautulli/Tautulli?include_prereleases&style=flat-square
-[badge-release-beta-commits]: https://img.shields.io/github/commits-since/Tautulli/Tautulli/latest/beta?style=flat-square&color=blue
-[badge-release-nightly-last-commit]: https://img.shields.io/github/last-commit/Tautulli/Tautulli/nightly?style=flat-square&color=blue
-[badge-release-nightly-commits]: https://img.shields.io/github/commits-since/Tautulli/Tautulli/latest/nightly?style=flat-square&color=blue
-[badge-docker-master]: https://img.shields.io/badge/docker-latest-blue?style=flat-square
-[badge-docker-master-ci]: https://img.shields.io/github/actions/workflow/status/Tautulli/Tautulli/.github/workflows/publish-docker.yml?style=flat-square&branch=master
-[badge-docker-beta]: https://img.shields.io/badge/docker-beta-blue?style=flat-square
-[badge-docker-beta-ci]: https://img.shields.io/github/actions/workflow/status/Tautulli/Tautulli/.github/workflows/publish-docker.yml?style=flat-square&branch=beta
-[badge-docker-nightly]: https://img.shields.io/badge/docker-nightly-blue?style=flat-square
-[badge-docker-nightly-ci]: https://img.shields.io/github/actions/workflow/status/Tautulli/Tautulli/.github/workflows/publish-docker.yml?style=flat-square&branch=nightly
+## Architecture
+
+See `docs/architecture.md` for the updated project structure and runtime flow.
 
 ## Support
 
-[![Wiki][badge-wiki]][Wiki]
-[![Discord][badge-discord]][Discord]
-[![Reddit][badge-reddit]][Reddit]
-[![Plex Forums][badge-forums]][Plex Forums]
-[![Issues][badge-issues]][Issues]
-
-[badge-wiki]: https://img.shields.io/badge/github-wiki-black?style=flat-square
-[badge-discord]: https://img.shields.io/discord/183396325142822912?label=discord&style=flat-square&color=7289DA
-[badge-reddit]: https://img.shields.io/reddit/subreddit-subscribers/tautulli?label=reddit&style=flat-square&color=FF5700
-[badge-forums]: https://img.shields.io/badge/plex%20forums-discussion-E5A00D?style=flat-square
-[badge-issues]: https://img.shields.io/badge/github-issues-black?style=flat-square
-
-If you think you've found a bug in Tautulli make sure you have read the [FAQ][]
-first to make sure it hasn't been covered by one of the questions there. If your
-problem isn't answered in the FAQ try the following first:
-
--   Update to the latest version of Tautulli.
--   Turning your device off and on again.
--   Analyzing your logs, you just might find the solution yourself!
--   Using the **search** function to see if this issue has already been reported/solved.
--   Checking the [Wiki][] for [Installation][] instructions and reading the [FAQs][FAQ].
--   For basic questions try asking on [Discord][], [Reddit][], 
-    or the [Plex Forums][] first before opening an issue.
-
-**If nothing has worked:**
-
-1.  Please check the [issues tracker][Issues] to see if someone else has already reported the bug.
-2.  If this is a new bug, open a [bug report][Issue New] on the issues tracker.
-3.  Provide a clear title to easily help identify your problem.
-4.  Use proper [Markdown syntax][] to structure your post (i.e. code/log in code blocks).
-5.  Make sure to fill out the required information on the issue template.
-6.  Close your issue when it's solved! If you found the solution yourself please
-    comment so that others benefit from it.
-
-## Feature Requests
-
-1.  Pleases check the [issues tracker][Issues] to see if someone else has already requested the feature.
-    If a similar idea has already been requested, _give it a thumbs up_. **Do not comment
-    with `+1` or something similar as it creates unnecessary spam.**
-2.  If this is a new feature request, open a [feature request][Issue New] on the issues tracker.
+Open issues and feature requests in this repository.
 
 ## License
 
-[![License][badge-license]][License]
+This is free software under the GPL v3 open source license. Feel free to do with it what you
+wish, but any modification must be open sourced. A copy of the license is included.
 
-[badge-license]: https://img.shields.io/github/license/Tautulli/Tautulli?style=flat-square
-
-This is free software under the GPL v3 open source license. Feel free to do with it what you wish,
-but any modification must be open sourced. A copy of the license is included.
-
-This software includes Highsoft software libraries which you may freely distribute for 
-non-commercial use. Commercial users must licence this software, for more information visit
+This software includes Highsoft software libraries which you may freely distribute for
+non-commercial use. Commercial users must license this software, for more information visit
 https://shop.highsoft.com/faq/non-commercial#non-commercial-redistribution.
-
-
-[DockerHub]: https://hub.docker.com/r/tautulli/tautulli
-[Releases]: https://github.com/Tautulli/Tautulli/releases
-[Releases Latest]: https://github.com/Tautulli/Tautulli/releases/latest
-[License]: https://github.com/Tautulli/Tautulli/blob/master/LICENSE
-[FAQ]: https://github.com/Tautulli/Tautulli/wiki/Frequently-Asked-Questions
-[Issues]: https://github.com/Tautulli/Tautulli/issues
-[Issue New]: https://github.com/Tautulli/Tautulli/issues/new/choose
-[Markdown syntax]: https://help.github.com/articles/github-flavored-markdown
-[Tautulli]: http://tautulli.com
-[Wiki]: https://github.com/Tautulli/Tautulli/wiki
-[Discord]: https://tautulli.com/discord
-[Reddit]: https://reddit.com/r/Tautulli
-[Plex Forums]: https://forums.plex.tv/t/tautulli-monitor-your-plex-media-server/225242
-[Commits Beta]: https://github.com/Tautulli/Tautulli/commits/beta
-[Commits Nightly]: https://github.com/Tautulli/Tautulli/commits/nightly
-
-[Publish Docker Master]: https://github.com/Tautulli/Tautulli/actions?query=workflow%3A"Publish+Docker"+branch%3Amaster
-[Publish Docker Beta]: https://github.com/Tautulli/Tautulli/actions?query=workflow%3A"Publish+Docker"+branch%3Abeta
-[Publish Docker Nightly]: https://github.com/Tautulli/Tautulli/actions?query=workflow%3A"Publish+Docker"+branch%3Anightly
