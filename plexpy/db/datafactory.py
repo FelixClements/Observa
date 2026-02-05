@@ -17,14 +17,13 @@
 
 import json
 
-from sqlalchemy import Float, and_, case, cast, delete, distinct, func, insert, lateral, literal, or_, select, text, true, update
+from sqlalchemy import Float, and_, case, cast, delete, distinct, func, insert, lateral, literal, or_, select, true, update
 from sqlalchemy.orm import aliased
 
 import plexpy
 from plexpy.app import common
 from plexpy.db import datatables
 from plexpy.db import queries
-from plexpy.db.engine import get_engine
 from plexpy.db.models import (
     CloudinaryLookup,
     ImageHashLookup,
@@ -485,35 +484,75 @@ class DataFactory(object):
                         total_plays_expr = func.count(distinct(group_key)).label('total_plays')
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                SessionHistoryMetadata.full_title,
-                                SessionHistoryMetadata.year,
-                                func.max(SessionHistory.rating_key).label('rating_key'),
-                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistory.started).label('started'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
-                                last_watch_expr,
+                                SessionHistoryMetadata.full_title.label('full_title'),
+                                SessionHistoryMetadata.year.label('year'),
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
                             .where(SessionHistory.media_type == 'movie')
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(SessionHistoryMetadata.full_title, SessionHistoryMetadata.year).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistory.rating_key.label('rating_key'),
+                                SessionHistory.section_id.label('section_id'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.thumb.label('thumb'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(
+                                SessionHistory.media_type == 'movie',
+                                SessionHistoryMetadata.full_title == agg.c.full_title,
+                                or_(
+                                    SessionHistoryMetadata.year == agg.c.year,
+                                    and_(SessionHistoryMetadata.year.is_(None), agg.c.year.is_(None)),
+                                ),
+                            )
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistoryMetadata.full_title, SessionHistoryMetadata.year)
-                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                agg.c.full_title,
+                                agg.c.year,
+                                last_row.c.rating_key,
+                                last_row.c.thumb,
+                                last_row.c.section_id,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .order_by(sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -558,36 +597,77 @@ class DataFactory(object):
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
                         users_watched_expr = func.count(distinct(SessionHistory.user_id)).label('users_watched')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                SessionHistoryMetadata.full_title,
-                                SessionHistoryMetadata.year,
-                                func.max(SessionHistory.rating_key).label('rating_key'),
-                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistory.started).label('started'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                SessionHistoryMetadata.full_title.label('full_title'),
+                                SessionHistoryMetadata.year.label('year'),
                                 users_watched_expr,
-                                last_watch_expr,
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
                             .where(SessionHistory.media_type == 'movie')
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(SessionHistoryMetadata.full_title, SessionHistoryMetadata.year).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistory.rating_key.label('rating_key'),
+                                SessionHistory.section_id.label('section_id'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.thumb.label('thumb'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(
+                                SessionHistory.media_type == 'movie',
+                                SessionHistoryMetadata.full_title == agg.c.full_title,
+                                or_(
+                                    SessionHistoryMetadata.year == agg.c.year,
+                                    and_(SessionHistoryMetadata.year.is_(None), agg.c.year.is_(None)),
+                                ),
+                            )
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistoryMetadata.full_title, SessionHistoryMetadata.year)
-                            .order_by(users_watched_expr.desc(), sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                agg.c.full_title,
+                                agg.c.year,
+                                last_row.c.rating_key,
+                                last_row.c.thumb,
+                                last_row.c.section_id,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                agg.c.users_watched,
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .order_by(agg.c.users_watched.desc(), sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -629,36 +709,73 @@ class DataFactory(object):
                         total_plays_expr = func.count(distinct(group_key)).label('total_plays')
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                SessionHistoryMetadata.grandparent_title,
-                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
-                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.year).label('year'),
-                                func.max(SessionHistory.rating_key).label('rating_key'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistory.started).label('started'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
-                                last_watch_expr,
+                                SessionHistoryMetadata.grandparent_title.label('grandparent_title'),
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
                             .where(SessionHistory.media_type == 'episode')
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(SessionHistoryMetadata.grandparent_title).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistoryMetadata.grandparent_rating_key.label('grandparent_rating_key'),
+                                SessionHistoryMetadata.grandparent_thumb.label('grandparent_thumb'),
+                                SessionHistory.section_id.label('section_id'),
+                                SessionHistoryMetadata.year.label('year'),
+                                SessionHistory.rating_key.label('rating_key'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(
+                                SessionHistory.media_type == 'episode',
+                                SessionHistoryMetadata.grandparent_title == agg.c.grandparent_title,
+                            )
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistoryMetadata.grandparent_title)
-                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                agg.c.grandparent_title,
+                                last_row.c.grandparent_rating_key,
+                                last_row.c.grandparent_thumb,
+                                last_row.c.section_id,
+                                last_row.c.year,
+                                last_row.c.rating_key,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .order_by(sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -703,37 +820,75 @@ class DataFactory(object):
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
                         users_watched_expr = func.count(distinct(SessionHistory.user_id)).label('users_watched')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                SessionHistoryMetadata.grandparent_title,
-                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
-                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.year).label('year'),
-                                func.max(SessionHistory.rating_key).label('rating_key'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistory.started).label('started'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                SessionHistoryMetadata.grandparent_title.label('grandparent_title'),
                                 users_watched_expr,
-                                last_watch_expr,
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
                             .where(SessionHistory.media_type == 'episode')
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(SessionHistoryMetadata.grandparent_title).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistoryMetadata.grandparent_rating_key.label('grandparent_rating_key'),
+                                SessionHistoryMetadata.grandparent_thumb.label('grandparent_thumb'),
+                                SessionHistory.section_id.label('section_id'),
+                                SessionHistoryMetadata.year.label('year'),
+                                SessionHistory.rating_key.label('rating_key'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(
+                                SessionHistory.media_type == 'episode',
+                                SessionHistoryMetadata.grandparent_title == agg.c.grandparent_title,
+                            )
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistoryMetadata.grandparent_title)
-                            .order_by(users_watched_expr.desc(), sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                agg.c.grandparent_title,
+                                last_row.c.grandparent_rating_key,
+                                last_row.c.grandparent_thumb,
+                                last_row.c.section_id,
+                                last_row.c.year,
+                                last_row.c.rating_key,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                agg.c.users_watched,
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .order_by(agg.c.users_watched.desc(), sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -775,36 +930,83 @@ class DataFactory(object):
                         total_plays_expr = func.count(distinct(group_key)).label('total_plays')
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                SessionHistoryMetadata.grandparent_title,
-                                SessionHistoryMetadata.original_title,
-                                func.max(SessionHistoryMetadata.year).label('year'),
-                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
-                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistory.started).label('started'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
-                                last_watch_expr,
+                                SessionHistoryMetadata.grandparent_title.label('grandparent_title'),
+                                SessionHistoryMetadata.original_title.label('original_title'),
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
                             .where(SessionHistory.media_type == 'track')
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(
+                            SessionHistoryMetadata.original_title,
+                            SessionHistoryMetadata.grandparent_title,
+                        ).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistoryMetadata.year.label('year'),
+                                SessionHistoryMetadata.grandparent_rating_key.label('grandparent_rating_key'),
+                                SessionHistoryMetadata.grandparent_thumb.label('grandparent_thumb'),
+                                SessionHistory.section_id.label('section_id'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(
+                                SessionHistory.media_type == 'track',
+                                SessionHistoryMetadata.grandparent_title == agg.c.grandparent_title,
+                                or_(
+                                    SessionHistoryMetadata.original_title == agg.c.original_title,
+                                    and_(
+                                        SessionHistoryMetadata.original_title.is_(None),
+                                        agg.c.original_title.is_(None),
+                                    ),
+                                ),
+                            )
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistoryMetadata.original_title, SessionHistoryMetadata.grandparent_title)
-                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                agg.c.grandparent_title,
+                                agg.c.original_title,
+                                last_row.c.year,
+                                last_row.c.grandparent_rating_key,
+                                last_row.c.grandparent_thumb,
+                                last_row.c.section_id,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .order_by(sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -849,37 +1051,85 @@ class DataFactory(object):
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
                         users_watched_expr = func.count(distinct(SessionHistory.user_id)).label('users_watched')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                SessionHistoryMetadata.grandparent_title,
-                                SessionHistoryMetadata.original_title,
-                                func.max(SessionHistoryMetadata.year).label('year'),
-                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
-                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistory.started).label('started'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
+                                SessionHistoryMetadata.grandparent_title.label('grandparent_title'),
+                                SessionHistoryMetadata.original_title.label('original_title'),
                                 users_watched_expr,
-                                last_watch_expr,
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
                             .where(SessionHistory.media_type == 'track')
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(
+                            SessionHistoryMetadata.original_title,
+                            SessionHistoryMetadata.grandparent_title,
+                        ).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistoryMetadata.year.label('year'),
+                                SessionHistoryMetadata.grandparent_rating_key.label('grandparent_rating_key'),
+                                SessionHistoryMetadata.grandparent_thumb.label('grandparent_thumb'),
+                                SessionHistory.section_id.label('section_id'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(
+                                SessionHistory.media_type == 'track',
+                                SessionHistoryMetadata.grandparent_title == agg.c.grandparent_title,
+                                or_(
+                                    SessionHistoryMetadata.original_title == agg.c.original_title,
+                                    and_(
+                                        SessionHistoryMetadata.original_title.is_(None),
+                                        agg.c.original_title.is_(None),
+                                    ),
+                                ),
+                            )
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistoryMetadata.original_title, SessionHistoryMetadata.grandparent_title)
-                            .order_by(users_watched_expr.desc(), sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                agg.c.grandparent_title,
+                                agg.c.original_title,
+                                last_row.c.year,
+                                last_row.c.grandparent_rating_key,
+                                last_row.c.grandparent_thumb,
+                                last_row.c.section_id,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                agg.c.users_watched,
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .order_by(agg.c.users_watched.desc(), sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -921,55 +1171,98 @@ class DataFactory(object):
                         total_plays_expr = func.count(distinct(group_key)).label('total_plays')
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                func.max(SessionHistoryMetadata.title).label('title'),
-                                func.max(SessionHistoryMetadata.grandparent_title).label('grandparent_title'),
-                                func.max(SessionHistoryMetadata.full_title).label('full_title'),
-                                func.max(SessionHistoryMetadata.year).label('year'),
-                                func.max(SessionHistoryMetadata.media_index).label('media_index'),
-                                func.max(SessionHistoryMetadata.parent_media_index).label('parent_media_index'),
-                                func.max(SessionHistory.rating_key).label('rating_key'),
-                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
-                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
-                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
-                                func.max(SessionHistory.user).label('user'),
-                                func.max(SessionHistory.user_id).label('user_id'),
-                                func.max(SessionHistory.player).label('player'),
                                 SessionHistory.section_id.label('section_id'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
-                                func.max(LibrarySection.section_name).label('section_name'),
-                                func.max(LibrarySection.section_type).label('section_type'),
-                                func.max(LibrarySection.thumb).label('library_thumb'),
-                                func.max(LibrarySection.custom_thumb_url).label('custom_thumb'),
-                                func.max(LibrarySection.art).label('library_art'),
-                                func.max(LibrarySection.custom_art_url).label('custom_art'),
-                                last_watch_expr,
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                        )
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(SessionHistory.section_id).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistoryMetadata.title.label('title'),
+                                SessionHistoryMetadata.grandparent_title.label('grandparent_title'),
+                                SessionHistoryMetadata.full_title.label('full_title'),
+                                SessionHistoryMetadata.year.label('year'),
+                                SessionHistoryMetadata.media_index.label('media_index'),
+                                SessionHistoryMetadata.parent_media_index.label('parent_media_index'),
+                                SessionHistory.rating_key.label('rating_key'),
+                                SessionHistoryMetadata.grandparent_rating_key.label('grandparent_rating_key'),
+                                SessionHistoryMetadata.thumb.label('thumb'),
+                                SessionHistoryMetadata.grandparent_thumb.label('grandparent_thumb'),
+                                SessionHistory.user.label('user'),
+                                SessionHistory.user_id.label('user_id'),
+                                SessionHistory.player.label('player'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.section_id == agg.c.section_id)
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
+                        stmt = (
+                            select(
+                                last_row.c.id,
+                                last_row.c.title,
+                                last_row.c.grandparent_title,
+                                last_row.c.full_title,
+                                last_row.c.year,
+                                last_row.c.media_index,
+                                last_row.c.parent_media_index,
+                                last_row.c.rating_key,
+                                last_row.c.grandparent_rating_key,
+                                last_row.c.thumb,
+                                last_row.c.grandparent_thumb,
+                                last_row.c.user,
+                                last_row.c.user_id,
+                                last_row.c.player,
+                                agg.c.section_id,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                LibrarySection.section_name.label('section_name'),
+                                LibrarySection.section_type.label('section_type'),
+                                LibrarySection.thumb.label('library_thumb'),
+                                LibrarySection.custom_thumb_url.label('custom_thumb'),
+                                LibrarySection.art.label('library_art'),
+                                LibrarySection.custom_art_url.label('custom_art'),
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
                             .outerjoin(
                                 LibrarySection,
                                 and_(
-                                    SessionHistory.section_id == LibrarySection.section_id,
+                                    LibrarySection.section_id == agg.c.section_id,
                                     LibrarySection.deleted_section == 0,
                                 ),
                             )
-                        )
-                        stmt = apply_filters(stmt)
-                        stmt = (
-                            stmt.group_by(SessionHistory.section_id)
-                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                            .order_by(sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -1041,46 +1334,87 @@ class DataFactory(object):
                         total_plays_expr = func.count(distinct(group_key)).label('total_plays')
                         total_duration_expr = func.sum(duration_expr).label('total_duration')
                         last_watch_expr = func.max(SessionHistory.started).label('last_watch')
-                        sort_metric = total_duration_expr if sort_type == 'total_duration' else total_plays_expr
 
-                        stmt = (
+                        agg = (
                             select(
-                                func.max(SessionHistory.id).label('id'),
-                                func.max(SessionHistoryMetadata.title).label('title'),
-                                func.max(SessionHistoryMetadata.grandparent_title).label('grandparent_title'),
-                                func.max(SessionHistoryMetadata.full_title).label('full_title'),
-                                func.max(SessionHistoryMetadata.year).label('year'),
-                                func.max(SessionHistoryMetadata.media_index).label('media_index'),
-                                func.max(SessionHistoryMetadata.parent_media_index).label('parent_media_index'),
-                                func.max(SessionHistory.rating_key).label('rating_key'),
-                                func.max(SessionHistoryMetadata.grandparent_rating_key).label('grandparent_rating_key'),
-                                func.max(SessionHistoryMetadata.thumb).label('thumb'),
-                                func.max(SessionHistoryMetadata.grandparent_thumb).label('grandparent_thumb'),
-                                func.max(SessionHistory.user).label('user'),
                                 SessionHistory.user_id.label('user_id'),
-                                func.max(SessionHistory.player).label('player'),
-                                func.max(SessionHistory.section_id).label('section_id'),
-                                func.max(SessionHistoryMetadata.art).label('art'),
-                                func.max(SessionHistory.media_type).label('media_type'),
-                                func.max(SessionHistoryMetadata.content_rating).label('content_rating'),
-                                func.max(SessionHistoryMetadata.labels).label('labels'),
-                                func.max(SessionHistoryMetadata.live).label('live'),
-                                func.max(SessionHistoryMetadata.guid).label('guid'),
-                                func.max(User.thumb).label('user_thumb'),
-                                func.max(User.custom_avatar_url).label('custom_thumb'),
-                                func.max(friendly_name_expr).label('friendly_name'),
-                                last_watch_expr,
                                 total_plays_expr,
                                 total_duration_expr,
+                                last_watch_expr,
                             )
                             .select_from(SessionHistory)
                             .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
-                            .outerjoin(User, SessionHistory.user_id == User.user_id)
                         )
-                        stmt = apply_filters(stmt)
+                        agg = apply_filters(agg)
+                        agg = agg.group_by(SessionHistory.user_id).subquery()
+
+                        last_row_stmt = (
+                            select(
+                                SessionHistory.id.label('id'),
+                                SessionHistoryMetadata.title.label('title'),
+                                SessionHistoryMetadata.grandparent_title.label('grandparent_title'),
+                                SessionHistoryMetadata.full_title.label('full_title'),
+                                SessionHistoryMetadata.year.label('year'),
+                                SessionHistoryMetadata.media_index.label('media_index'),
+                                SessionHistoryMetadata.parent_media_index.label('parent_media_index'),
+                                SessionHistory.rating_key.label('rating_key'),
+                                SessionHistoryMetadata.grandparent_rating_key.label('grandparent_rating_key'),
+                                SessionHistoryMetadata.thumb.label('thumb'),
+                                SessionHistoryMetadata.grandparent_thumb.label('grandparent_thumb'),
+                                SessionHistory.user.label('user'),
+                                SessionHistory.player.label('player'),
+                                SessionHistoryMetadata.art.label('art'),
+                                SessionHistory.media_type.label('media_type'),
+                                SessionHistoryMetadata.content_rating.label('content_rating'),
+                                SessionHistoryMetadata.labels.label('labels'),
+                                SessionHistoryMetadata.live.label('live'),
+                                SessionHistoryMetadata.guid.label('guid'),
+                            )
+                            .select_from(SessionHistory)
+                            .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                            .where(SessionHistory.user_id == agg.c.user_id)
+                        )
+                        last_row_stmt = apply_filters(last_row_stmt)
+                        last_row = lateral(
+                            last_row_stmt
+                            .order_by(SessionHistory.started.desc(), SessionHistory.id.desc())
+                            .limit(1)
+                        ).alias('last_row')
+
+                        sort_metric = agg.c.total_duration if sort_type == 'total_duration' else agg.c.total_plays
                         stmt = (
-                            stmt.group_by(SessionHistory.user_id)
-                            .order_by(sort_metric.desc(), last_watch_expr.desc())
+                            select(
+                                last_row.c.id,
+                                last_row.c.title,
+                                last_row.c.grandparent_title,
+                                last_row.c.full_title,
+                                last_row.c.year,
+                                last_row.c.media_index,
+                                last_row.c.parent_media_index,
+                                last_row.c.rating_key,
+                                last_row.c.grandparent_rating_key,
+                                last_row.c.thumb,
+                                last_row.c.grandparent_thumb,
+                                last_row.c.user,
+                                agg.c.user_id,
+                                last_row.c.player,
+                                last_row.c.art,
+                                last_row.c.media_type,
+                                last_row.c.content_rating,
+                                last_row.c.labels,
+                                last_row.c.live,
+                                last_row.c.guid,
+                                User.thumb.label('user_thumb'),
+                                User.custom_avatar_url.label('custom_thumb'),
+                                friendly_name_expr.label('friendly_name'),
+                                agg.c.last_watch,
+                                agg.c.total_plays,
+                                agg.c.total_duration,
+                            )
+                            .select_from(agg)
+                            .join(last_row, true())
+                            .outerjoin(User, agg.c.user_id == User.user_id)
+                            .order_by(sort_metric.desc(), agg.c.last_watch.desc())
                         )
                         stmt = queries.apply_pagination(stmt, stats_start, stats_count)
                         result = queries.fetch_mappings(db_session, stmt)
@@ -2869,10 +3203,7 @@ class DataFactory(object):
             logger.info("Tautulli DataFactory :: Clearing notification logs from database.")
             with session_scope() as db_session:
                 db_session.execute(delete(NotifyLog))
-
-            engine = get_engine()
-            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-                connection.execute(text('VACUUM'))
+            raw_pg.vacuum()
             return True
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for delete_notification_log: %s." % e)
@@ -2943,10 +3274,7 @@ class DataFactory(object):
             logger.info("Tautulli DataFactory :: Clearing newsletter logs from database.")
             with session_scope() as db_session:
                 db_session.execute(delete(NewsletterLog))
-
-            engine = get_engine()
-            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-                connection.execute(text('VACUUM'))
+            raw_pg.vacuum()
             return True
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for delete_newsletter_log: %s." % e)

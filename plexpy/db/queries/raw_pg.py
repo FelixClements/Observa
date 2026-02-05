@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 from sqlalchemy import text
 
 from plexpy.db import datatables
+from plexpy.db.engine import get_engine
 from plexpy.db.session import session_scope
 
 
@@ -37,3 +38,9 @@ def fetch_total_duration(custom_where: Optional[Sequence] = None) -> int:
         row = db_session.execute(text(query), params).mappings().first()
 
     return row['total_duration'] if row else 0
+
+
+def vacuum() -> None:
+    engine = get_engine()
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.execute(text("VACUUM"))
