@@ -89,9 +89,9 @@
             var result = $.parseJSON(jqXHR.responseText);
             var msg = result.message;
             if (result.result == 'success') {
-                showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000)
+                showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000)
             } else {
-                showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true)
+                showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true)
             }
         }
 

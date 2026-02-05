@@ -734,7 +734,7 @@
     function validateFilename() {
         var filename = $('#newsletter_config_filename').val();
         if (filename !== '' && !(filename.endsWith('.html'))) {
-            showMsg('<i class="fa fa-times"></i> Failed to save newsletter. Invalid file name.', false, true, 5000, true);
+            showMsg({ iconClass: 'fa fa-times', text: 'Failed to save newsletter. Invalid file name.' }, false, true, 5000, true);
             return false;
         } else {
             return true;
@@ -746,7 +746,7 @@
         if (/^[a-zA-Z0-9_-]*$/.test(id_name)) {
             return true;
         } else {
-            showMsg('<i class="fa fa-times"></i> Failed to save newsletter. Invalid unique ID name.', false, true, 5000, true);
+            showMsg({ iconClass: 'fa fa-times', text: 'Failed to save newsletter. Invalid unique ID name.' }, false, true, 5000, true);
             return false;
         }
     }
@@ -902,9 +902,9 @@
             var result = $.parseJSON(jqXHR.responseText);
             var msg = result.message;
             if (result.result == 'success') {
-                showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000)
+                showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000)
             } else {
-                showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true)
+                showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true)
             }
         }
 
@@ -978,12 +978,12 @@
     });
 
     function previewNewsletter() {
-        showMsg('<i class="fa fa-check"></i>&nbsp; Check pop-up blocker if no response.', false, true, 2000);
+        showMsg({ iconClass: 'fa fa-check', text: 'Check pop-up blocker if no response.' }, false, true, 2000);
         window.open('newsletter_preview?newsletter_id=' + $('#newsletter_id').val());
     }
 
     function sendTestNewsletter() {
-        showMsg('<i class="fa fa-refresh fa-spin"></i>&nbsp; Sending Newsletter', false);
+        showMsg('Sending Newsletter', true, false);
         $.ajax({
             url: 'send_newsletter',
             data: {
@@ -994,9 +994,9 @@
             async: true,
             success: function (data) {
                 if (data.result === 'success') {
-                    showMsg('<i class="fa fa-check"></i> ' + data.message, false, true, 5000);
+                    showMsg({ iconClass: 'fa fa-check', text: data.message }, false, true, 5000);
                 } else {
-                    showMsg('<i class="fa fa-exclamation-circle"></i> ' + data.message, false, true, 5000, true);
+                    showMsg({ iconClass: 'fa fa-exclamation-circle', text: data.message }, false, true, 5000, true);
                 }
             }
         });

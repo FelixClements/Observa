@@ -288,8 +288,8 @@ users_list_table_options = {
         }
     },
     "preDrawCallback": function(settings) {
-        var msg = "<i class='fa fa-refresh fa-spin'></i>&nbsp; Fetching rows...";
-        showMsg(msg, false, false, 0)
+        var msg = 'Fetching rows...';
+        showMsg(msg, true, false, 0)
     },
     "rowCallback": function (row, rowData) {
         if ($.inArray(rowData['user_id'], users_to_delete) !== -1) {

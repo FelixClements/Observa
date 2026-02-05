@@ -305,8 +305,8 @@ media_info_table_options = {
             ' (filtered from ' + humanFileSize(settings.json.total_file_size) + ')</span>');
     },
     "preDrawCallback": function (settings) {
-        var msg = "<i class='fa fa-refresh fa-spin'></i>&nbsp; Fetching rows...";
-        showMsg(msg, false, false, 0)
+        var msg = 'Fetching rows...';
+        showMsg(msg, true, false, 0)
     },
     "rowCallback": function (row, rowData, rowIndex) {
         if (rowData['rating_key'] in media_info_child_table) {

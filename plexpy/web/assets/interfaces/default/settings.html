@@ -2166,7 +2166,7 @@ Rating: {rating}/10   --> Rating: /10
     }
 
     function loadNotifierConfig(notifier_id) {
-        showMsg('<i class="fa fa-refresh fa-spin"></i>&nbsp; Loading Configuration', false);
+        showMsg('Loading Configuration', true, false);
         $.ajax({
             url: 'get_notifier_config_modal',
             data: { notifier_id: notifier_id },
@@ -2174,7 +2174,7 @@ Rating: {rating}/10   --> Rating: /10
             async: true,
             complete: function (xhr, status) {
                 $("#notifier-config-modal").html(xhr.responseText).modal('show');
-                showMsg('<i class="fa fa-check"></i> Configuration Loaded', false, true, 2000);
+                showMsg({ iconClass: 'fa fa-check', text: 'Configuration Loaded' }, false, true, 2000);
             }
         });
     }
@@ -2191,7 +2191,7 @@ Rating: {rating}/10   --> Rating: /10
     }
 
     function loadNewsletterConfig(newsletter_id) {
-        showMsg('<i class="fa fa-refresh fa-spin"></i>&nbsp; Loading Configuration', false);
+        showMsg('Loading Configuration', true, false);
         $.ajax({
             url: 'get_newsletter_config_modal',
             data: { newsletter_id: newsletter_id },
@@ -2199,7 +2199,7 @@ Rating: {rating}/10   --> Rating: /10
             async: true,
             complete: function (xhr, status) {
                 $("#newsletter-config-modal").html(xhr.responseText).modal('show');
-                showMsg('<i class="fa fa-check"></i> Configuration Loaded', false, true, 2000);
+                showMsg({ iconClass: 'fa fa-check', text: 'Configuration Loaded' }, false, true, 2000);
             }
         });
     }
@@ -2216,7 +2216,7 @@ Rating: {rating}/10   --> Rating: /10
     }
 
     function loadMobileDeviceConfig(mobile_device_id) {
-        showMsg('<i class="fa fa-refresh fa-spin"></i>&nbsp; Loading Configuration', false);
+        showMsg('Loading Configuration', true, false);
         $.ajax({
             url: 'get_mobile_device_config_modal',
             data: { mobile_device_id: mobile_device_id },
@@ -2224,7 +2224,7 @@ Rating: {rating}/10   --> Rating: /10
             async: true,
             complete: function (xhr, status) {
                 $("#mobile-device-config-modal").html(xhr.responseText).modal('show');
-                showMsg('<i class="fa fa-check"></i> Configuration Loaded', false, true, 2000);
+                showMsg({ iconClass: 'fa fa-check', text: 'Configuration Loaded' }, false, true, 2000);
             }
         });
     }
@@ -2342,7 +2342,7 @@ $(document).ready(function() {
             doAjaxCall('configUpdate', $(this), 'tabs', true, showMsg, _callback);
             return true;
         } else {
-            showMsg('<i class="fa fa-exclamation-circle"></i> Please verify your settings.', false, true, 5000, true);
+            showMsg({ iconClass: 'fa fa-exclamation-circle', text: 'Please verify your settings.' }, false, true, 5000, true);
             return false;
         }
     }
@@ -2482,7 +2482,10 @@ $(document).ready(function() {
         var new_branch = $("#git_branch option:selected").val();
 
         if (new_remote === current_remote && new_branch === current_branch) {
-            showMsg('<i class="fa fa-exclamation-circle"></i> Already on the ' + current_remote + ' ' + current_branch + ' branch.', false, true, 5000, true)
+            showMsg({
+                iconClass: 'fa fa-exclamation-circle',
+                text: 'Already on the ' + current_remote + ' ' + current_branch + ' branch.'
+            }, false, true, 5000, true)
         } else {
             var msg = 'Are you sure you want to switch to the <strong>' + new_remote + '/' + new_branch + '</strong> branch?' +
                 '<br />Switching branches may cause Tautulli to become unstable.<br /><br />Tautulli will restart.';
@@ -2670,7 +2673,7 @@ $(document).ready(function() {
                     } else {
                         msg += ' Error: ' + jqXHR.status
                     }
-                    showMsg('<i class="fa fa-exclamation-circle"></i> ' + msg, false, true, 5000, true)
+                    showMsg({ iconClass: 'fa fa-exclamation-circle', text: msg }, false, true, 5000, true)
                 },
                 success: function(xhr, status) {
                     var result = xhr;
@@ -2687,11 +2690,20 @@ $(document).ready(function() {
                         if (ws === false) {
                             $("#pms_verify").html('<i class="fa fa-close"></i>').fadeIn('fast');
                             $("#pms_ip_group").addClass("has-error");
-                            showMsg('<i class="fa fa-exclamation-circle"></i> Server found but unable to connect websocket.<br>Check the <a href="logs">logs</a> for errors.', false, true, 5000, true)
+                            showMsg({
+                                iconClass: 'fa fa-exclamation-circle',
+                                parts: [
+                                    'Server found but unable to connect websocket.',
+                                    { type: 'br' },
+                                    'Check the ',
+                                    { type: 'link', href: 'logs', text: 'logs' },
+                                    ' for errors.'
+                                ]
+                            }, false, true, 5000, true)
                         } else {
                             $("#pms_verify").html('<i class="fa fa-check"></i>').fadeIn('fast');
                             $("#pms_ip_group").removeClass("has-error");
-                            showMsg('<i class="fa fa-check"></i> Server verified.', false, true, 5000);
+                            showMsg({ iconClass: 'fa fa-check', text: 'Server verified.' }, false, true, 5000);
                             serverChanged = false;
                         }
 
@@ -2701,14 +2713,14 @@ $(document).ready(function() {
                     } else {
                         $("#pms_verify").html('<i class="fa fa-close"></i>').fadeIn('fast');
                         $("#pms_ip_group").addClass("has-error");
-                        showMsg('<i class="fa fa-exclamation-circle"></i> Could not verify your server.', false, true, 5000, true)
+                        showMsg({ iconClass: 'fa fa-exclamation-circle', text: 'Could not verify your server.' }, false, true, 5000, true)
                     }
                 }
             });
         } else {
             $("#pms_verify").html('<i class="fa fa-close"></i>').fadeIn('fast');
             $("#pms_ip_group").addClass("has-error");
-            showMsg('<i class="fa fa-exclamation-circle"></i> Plex IP address and port cannot be blank.', false, true, 5000, true)
+            showMsg({ iconClass: 'fa fa-exclamation-circle', text: 'Plex IP address and port cannot be blank.' }, false, true, 5000, true)
         }
     }
 
@@ -2745,7 +2757,7 @@ $(document).ready(function() {
     }
     function OAuthSuccessCallback(authToken) {
         $.post('save_pms_token', { token: authToken, client_id: $('#pms_client_id').val() }, function() {
-            showMsg('<i class="fa fa-check"></i> Saved new Plex.tv token.', false, true, 5000);
+            showMsg({ iconClass: 'fa fa-check', text: 'Saved new Plex.tv token.' }, false, true, 5000);
             getServerOptions();
         });
         $("#pms-token-status").html('<i class="fa fa-check"></i>&nbsp; Authentication successful.').fadeIn('fast');
@@ -2984,10 +2996,10 @@ $(document).ready(function() {
                 var msg = result.message;
                 $('#add-notifier-modal').modal('hide');
                 if (result.result === 'success') {
-                    showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000);
+                    showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000);
                     loadNotifierConfig(result.notifier_id);
                 } else {
-                    showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true);
+                    showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true);
                 }
                 getNotifiersTable();
             }
@@ -3006,10 +3018,10 @@ $(document).ready(function() {
                 var msg = result.message;
                 $('#add-newsletter-modal').modal('hide');
                 if (result.result === 'success') {
-                    showMsg('<i class="fa fa-check"></i> ' + msg, false, true, 5000);
+                    showMsg({ iconClass: 'fa fa-check', text: msg }, false, true, 5000);
                     loadNewsletterConfig(result.newsletter_id);
                 } else {
-                    showMsg('<i class="fa fa-times"></i> ' + msg, false, true, 5000, true);
+                    showMsg({ iconClass: 'fa fa-times', text: msg }, false, true, 5000, true);
                 }
                 getNewslettersTable();
             }

@@ -1159,9 +1159,9 @@ DOCUMENTATION :: END
                 async: true,
                 success: function (data) {
                     if (data.result === 'success') {
-                        showMsg('<i class="fa fa-check"></i> ' + data.message, false, true, 5000);
+                        showMsg({ iconClass: 'fa fa-check', text: data.message }, false, true, 5000);
                     } else {
-                        showMsg('<i class="fa fa-exclamation-circle"></i> ' + data.message, false, true, 5000, true);
+                        showMsg({ iconClass: 'fa fa-exclamation-circle', text: data.message }, false, true, 5000, true);
                     }
                 }
             });
