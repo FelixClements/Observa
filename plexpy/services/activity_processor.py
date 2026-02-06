@@ -18,6 +18,7 @@ import json
 
 import plexpy
 from sqlalchemy import Integer, delete, func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from plexpy.integrations import pmsconnect
 from plexpy.services import libraries
@@ -167,8 +168,7 @@ class ActivityProcessor(object):
                 if isinstance(column.type, Integer):
                     values[column.name] = _optional_int(values[column.name])
 
-            keys = {'session_key': session_key,
-                    'rating_key': rating_key}
+            keys = {'session_key': session_key}
 
             cleaned_keys = {key: value for key, value in keys.items() if value is not None}
             inserted = False
@@ -176,7 +176,7 @@ class ActivityProcessor(object):
 
             with session_scope() as db_session:
                 if cleaned_keys:
-                    conditions = [getattr(SessionModel, key) == value for key, value in cleaned_keys.items()]
+                    conditions = [SessionModel.session_key == session_key]
                     stmt = update(SessionModel).where(*conditions).values(**values)
                     result = db_session.execute(stmt)
                     if not result.rowcount or result.rowcount == 0:
@@ -185,9 +185,18 @@ class ActivityProcessor(object):
                     inserted = True
 
                 if inserted:
-                    insert_values = {**values, **cleaned_keys}
-                    stmt = insert(SessionModel).values(**insert_values).returning(SessionModel.id)
-                    inserted_id = db_session.execute(stmt).scalar_one_or_none()
+                    stmt = insert(SessionModel).values(**values).returning(SessionModel.id)
+                    try:
+                        inserted_id = db_session.execute(stmt).scalar_one_or_none()
+                    except IntegrityError:
+                        inserted = False
+                        if cleaned_keys:
+                            stmt = (
+                                update(SessionModel)
+                                .where(SessionModel.session_key == session_key)
+                                .values(**values)
+                            )
+                            db_session.execute(stmt)
 
             if inserted:
                 # If it's our first write then time stamp it.
@@ -203,8 +212,11 @@ class ActivityProcessor(object):
                         stmt = update(SessionModel).where(SessionModel.id == inserted_id).values(**timestamp)
                         db_session.execute(stmt)
                     elif cleaned_keys:
-                        conditions = [getattr(SessionModel, key) == value for key, value in cleaned_keys.items()]
-                        stmt = update(SessionModel).where(*conditions).values(**timestamp)
+                        stmt = (
+                            update(SessionModel)
+                            .where(SessionModel.session_key == session_key)
+                            .values(**timestamp)
+                        )
                         db_session.execute(stmt)
 
                 # Check if any notification agents have notifications enabled
@@ -361,10 +373,62 @@ class ActivityProcessor(object):
 
                 # logger.debug("Tautulli ActivityProcessor :: Writing sessionKey %s session_history transaction..."
                 #              % session['session_key'])
+                def _optional_int(value):
+                    if value is None or value == '':
+                        return None
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
+
+                def _dedupe_clause(column, value):
+                    if value is None:
+                        return column.is_(None)
+                    return column == value
+
+                dedupe_user_id = _optional_int(session.get('user_id'))
+                dedupe_rating_key = _optional_int(session.get('rating_key'))
+                dedupe_started = _optional_int(session.get('started'))
+                dedupe_machine_id = session.get('machine_id') or None
+
+                last_id = None
+                inserted = False
                 with session_scope() as db_session:
-                    stmt = insert(SessionHistory).values(**values).returning(SessionHistory.id)
-                    last_id = db_session.execute(stmt).scalar_one_or_none()
-                self.group_history(last_id, session, metadata)
+                    dedupe_conditions = [
+                        _dedupe_clause(SessionHistory.user_id, dedupe_user_id),
+                        _dedupe_clause(SessionHistory.rating_key, dedupe_rating_key),
+                        _dedupe_clause(SessionHistory.started, dedupe_started),
+                        _dedupe_clause(SessionHistory.machine_id, dedupe_machine_id),
+                    ]
+                    stmt = (
+                        select(SessionHistory.id)
+                        .where(*dedupe_conditions)
+                        .order_by(SessionHistory.id.desc())
+                        .limit(1)
+                    )
+                    existing_id = db_session.execute(stmt).scalar_one_or_none()
+                    if existing_id:
+                        last_id = existing_id
+                        stmt = (
+                            update(SessionHistory)
+                            .where(SessionHistory.id == existing_id)
+                            .values(
+                                stopped=stopped,
+                                view_offset=values['view_offset'],
+                                paused_counter=values['paused_counter'],
+                            )
+                        )
+                        db_session.execute(stmt)
+                    else:
+                        stmt = insert(SessionHistory).values(**values).returning(SessionHistory.id)
+                        last_id = db_session.execute(stmt).scalar_one_or_none()
+                        inserted = True
+
+                if inserted and last_id:
+                    self.group_history(last_id, session, metadata)
+
+                if not last_id:
+                    return session['id']
                 
                 # logger.debug("Tautulli ActivityProcessor :: Successfully written history item, last id for session_history is %s"
                 #              % last_id)
@@ -731,8 +795,17 @@ class ActivityProcessor(object):
 
                 insert_values = {'session_key': session_key}
                 insert_values.update(values)
-                db_session.execute(insert(SessionModel).values(**insert_values))
-                return 'insert'
+                try:
+                    db_session.execute(insert(SessionModel).values(**insert_values))
+                    return 'insert'
+                except IntegrityError:
+                    stmt = (
+                        update(SessionModel)
+                        .where(SessionModel.session_key == session_key)
+                        .values(**values)
+                    )
+                    db_session.execute(stmt)
+                    return 'update'
 
         return None
 
@@ -784,7 +857,15 @@ class ActivityProcessor(object):
 
                 insert_values = {'session_key': session_key}
                 insert_values.update(values)
-                db_session.execute(insert(SessionModel).values(**insert_values))
+                try:
+                    db_session.execute(insert(SessionModel).values(**insert_values))
+                except IntegrityError:
+                    stmt = (
+                        update(SessionModel)
+                        .where(SessionModel.session_key == session_key)
+                        .values(**values)
+                    )
+                    db_session.execute(stmt)
 
     def increment_session_buffer_count(self, session_key=None):
         if str(session_key).isdigit():

@@ -3344,6 +3344,11 @@ class DataFactory(object):
         pms_connect = pmsconnect.PmsConnect()
         metadata = pms_connect.get_metadata_details(rating_key)
 
+        try:
+            rating_key_int = int(metadata['rating_key'])
+        except (TypeError, ValueError, KeyError):
+            return False
+
         values = {'added_at': metadata['added_at'],
                   'section_id': metadata['section_id'],
                   'parent_rating_key': metadata['parent_rating_key'],
@@ -3356,12 +3361,12 @@ class DataFactory(object):
             with session_scope() as db_session:
                 stmt = (
                     update(RecentlyAdded)
-                    .where(RecentlyAdded.rating_key == metadata['rating_key'])
+                    .where(RecentlyAdded.rating_key == rating_key_int)
                     .values(**values)
                 )
                 result = db_session.execute(stmt)
                 if not result.rowcount:
-                    insert_values = {'rating_key': metadata['rating_key'], **values}
+                    insert_values = {'rating_key': rating_key_int, **values}
                     db_session.execute(insert(RecentlyAdded).values(**insert_values))
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for set_recently_added_item: %s." % e)

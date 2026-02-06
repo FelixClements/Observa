@@ -194,7 +194,10 @@ def _migrate_tables(sqlite_connection, engine: Engine, tables: Sequence) -> List
                 ", ".join(missing_columns),
             )
 
-        sqlite_count = _sqlite_row_count(sqlite_connection, table_name)
+        if table_name == 'sessions':
+            sqlite_count = _sqlite_sessions_row_count(sqlite_connection, table_name)
+        else:
+            sqlite_count = _sqlite_row_count(sqlite_connection, table_name)
         logger.info("SQLite migration :: Migrating table '%s' (%s rows).", table_name, sqlite_count)
 
         postgres_count = _copy_table_data(
@@ -264,9 +267,29 @@ def _copy_table_data(
     normalizers = _column_normalizers(table, columns)
     column_list = ", ".join(_quote_identifier(column) for column in columns)
     table_identifier = _quote_identifier(table.name)
-    cursor = sqlite_connection.execute(
-        text("SELECT %s FROM %s" % (column_list, table_identifier))
-    )
+    if table.name == 'sessions' and 'session_key' in columns:
+        session_key_col = _quote_identifier('session_key')
+        id_col = _quote_identifier('id')
+        cursor = sqlite_connection.execute(
+            text(
+                "SELECT %s FROM %s WHERE %s IS NULL "
+                "OR %s IN (SELECT MAX(%s) FROM %s WHERE %s IS NOT NULL GROUP BY %s)"
+                % (
+                    column_list,
+                    table_identifier,
+                    session_key_col,
+                    id_col,
+                    id_col,
+                    table_identifier,
+                    session_key_col,
+                    session_key_col,
+                )
+            )
+        )
+    else:
+        cursor = sqlite_connection.execute(
+            text("SELECT %s FROM %s" % (column_list, table_identifier))
+        )
 
     inserted = 0
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -405,6 +428,30 @@ def _sqlite_columns(sqlite_connection, table_name: str) -> List[str]:
 def _sqlite_row_count(sqlite_connection, table_name: str) -> int:
     result = sqlite_connection.execute(
         text("SELECT COUNT(*) AS count FROM %s" % _quote_identifier(table_name))
+    ).scalar()
+    if result is None:
+        return 0
+    return int(result)
+
+
+def _sqlite_sessions_row_count(sqlite_connection, table_name: str) -> int:
+    table_identifier = _quote_identifier(table_name)
+    session_key_col = _quote_identifier('session_key')
+    id_col = _quote_identifier('id')
+    result = sqlite_connection.execute(
+        text(
+            "SELECT COUNT(*) FROM %s WHERE %s IS NULL "
+            "OR %s IN (SELECT MAX(%s) FROM %s WHERE %s IS NOT NULL GROUP BY %s)"
+            % (
+                table_identifier,
+                session_key_col,
+                id_col,
+                id_col,
+                table_identifier,
+                session_key_col,
+                session_key_col,
+            )
+        )
     ).scalar()
     if result is None:
         return 0

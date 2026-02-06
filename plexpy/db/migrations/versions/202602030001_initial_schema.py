@@ -150,6 +150,7 @@ def upgrade() -> None:
         sa.Column('write_attempts', sa.Integer(), server_default=sa.text('0'), nullable=True),
         sa.Column('raw_stream_info', sa.Text(), nullable=True),
         sa.Column('rating_key_websocket', sa.Text(), nullable=True),
+        sa.UniqueConstraint('session_key', name='idx_sessions_session_key'),
         sa.PrimaryKeyConstraint('id', name='pk_sessions'),
     )
 

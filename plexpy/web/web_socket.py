@@ -39,9 +39,20 @@ opcode_data = (websocket.ABNF.OPCODE_TEXT, websocket.ABNF.OPCODE_BINARY)
 ws_shutdown = False
 pong_timer = None
 pong_count = 0
+ws_lock = threading.Lock()
+ws_thread = None
 
 
 def start_thread():
+    global ws_thread
+    with ws_lock:
+        if ws_thread is not None:
+            if ws_thread.is_alive():
+                return
+            ws_thread = None
+        ws_thread = threading.Thread(target=run)
+        ws_thread.daemon = True
+
     try:
         # Check for any existing sessions on start up
         activity_pinger.check_active_sessions(ws_request=True)
@@ -51,9 +62,7 @@ def start_thread():
         cleanup.delete_sessions()
 
     # Start the websocket listener on it's own thread
-    thread = threading.Thread(target=run)
-    thread.daemon = True
-    thread.start()
+    ws_thread.start()
 
 
 def on_connect():
@@ -236,6 +245,11 @@ def run():
 
     if not plexpy.WS_CONNECTED and not ws_shutdown:
         on_disconnect()
+
+    global ws_thread
+    with ws_lock:
+        if ws_thread is threading.current_thread():
+            ws_thread = None
 
     logger.debug("Tautulli WebSocket :: Leaving thread.")
 

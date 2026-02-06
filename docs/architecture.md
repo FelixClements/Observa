@@ -9,6 +9,8 @@ data-directory selection, and startup. Runtime state is centralized in
 The web UI and API run on CherryPy, render Mako templates from
 `plexpy/web/assets/interfaces`, and expose JSON/XML endpoints under `/api/v2`.
 Plex server events are tracked via polling and a Plex WebSocket connection.
+Active playback sessions are stored in `sessions` and keyed by Plex `session_key`
+to prevent duplicate active stream rows.
 
 The runtime database is PostgreSQL, accessed through SQLAlchemy. Alembic migrations
 manage schema versions. SQLite is supported only as a one-time migration source.

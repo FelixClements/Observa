@@ -8,6 +8,9 @@ from plexpy.db.models import Base, auto_pk
 
 class Session(Base):
     __tablename__ = 'sessions'
+    __table_args__ = (
+        UniqueConstraint('session_key', name='idx_sessions_session_key'),
+    )
 
     id: Mapped[int] = auto_pk()
     session_key: Mapped[Optional[int]] = mapped_column(Integer)
