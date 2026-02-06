@@ -27,6 +27,14 @@ def upgrade() -> None:
         )
     )
 
+    inspector = sa.inspect(connection)
+    existing_uniques = inspector.get_unique_constraints('sessions')
+    for constraint in existing_uniques:
+        name = constraint.get('name')
+        columns = constraint.get('column_names') or constraint.get('columns') or []
+        if name == 'idx_sessions_session_key' or columns == ['session_key']:
+            return
+
     op.create_unique_constraint('idx_sessions_session_key', 'sessions', ['session_key'])
 
 
