@@ -123,6 +123,11 @@ class DataFactory(object):
         if custom_where is None:
             custom_where = []
 
+        reference_filter = any(
+            clause.rstrip(' OR') == 'session_history.reference_id'
+            for clause, _ in custom_where
+        )
+
         custom_where_sql = []
         custom_where_union = []
         for clause, value in custom_where:
@@ -147,6 +152,9 @@ class DataFactory(object):
 
         if include_activity is None:
             include_activity = plexpy.CONFIG.HISTORY_TABLE_ACTIVITY
+
+        if include_activity and reference_filter:
+            include_activity = False
 
         if session.get_session_user_id():
             session_user_id = str(session.get_session_user_id())
