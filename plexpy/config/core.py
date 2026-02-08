@@ -1,4 +1,4 @@
-﻿# This file is part of Tautulli.
+# This file is part of Tautulli.
 #
 #  Tautulli is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -113,8 +113,8 @@ _CONFIG_DEFINITIONS = {
     'GIT_PATH': (str, 'General', ''),
     'GIT_REMOTE': (str, 'General', 'origin'),
     'GIT_TOKEN': (str, 'General', ''),
-    'GIT_USER': (str, 'General', 'Tautulli'),
-    'GIT_REPO': (str, 'General', 'Tautulli'),
+    'GIT_USER': (str, 'General', 'FelixClements'),
+    'GIT_REPO': (str, 'General', 'Observa'),
     'GROUP_HISTORY_TABLES': (int, 'General', 1),
     'HISTORY_TABLE_ACTIVITY': (int, 'General', 1),
     'HOME_SECTIONS': (list, 'General', ['current_activity', 'watch_stats', 'library_stats', 'recently_added']),
@@ -658,9 +658,6 @@ class Config(object):
             self.CONFIG_VERSION = 10
 
         if self.CONFIG_VERSION == 10:
-            self.GIT_USER = 'Tautulli'
-            self.GIT_REPO = 'Tautulli'
-
             self.CONFIG_VERSION = 11
 
         if self.CONFIG_VERSION == 11:

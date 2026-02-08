@@ -1,4 +1,4 @@
-﻿# This file is part of Tautulli.
+# This file is part of Tautulli.
 #
 #  Tautulli is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -385,6 +385,10 @@ class ActivityProcessor(object):
                     if value is None:
                         return column.is_(None)
                     return column == value
+
+                for column in SessionHistory.__table__.columns:
+                    if column.name in values and isinstance(column.type, Integer):
+                        values[column.name] = _optional_int(values[column.name])
 
                 dedupe_user_id = _optional_int(session.get('user_id'))
                 dedupe_rating_key = _optional_int(session.get('rating_key'))

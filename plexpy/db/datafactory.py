@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -17,7 +17,7 @@
 
 import json
 
-from sqlalchemy import Float, and_, case, cast, delete, distinct, func, insert, lateral, literal, or_, select, true, update
+from sqlalchemy import Float, Integer, and_, case, cast, delete, distinct, func, insert, lateral, literal, or_, select, true, update
 from sqlalchemy.orm import aliased
 
 import plexpy
@@ -3364,6 +3364,18 @@ class DataFactory(object):
                   'media_type': metadata['media_type'],
                   'media_info': json.dumps(metadata['media_info'])
                   }
+
+        def _optional_int(value):
+            if value is None or value == '':
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        for column in RecentlyAdded.__table__.columns:
+            if column.name in values and isinstance(column.type, Integer):
+                values[column.name] = _optional_int(values[column.name])
 
         try:
             with session_scope() as db_session:

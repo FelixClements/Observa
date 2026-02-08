@@ -17,6 +17,7 @@ RUN apt-get update \
     git \
     gosu \
     passwd \
+    postgresql-client \
     tzdata \
   && rm -rf /var/lib/apt/lists/*
 

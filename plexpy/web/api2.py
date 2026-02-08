@@ -701,8 +701,18 @@ General optional parameters:
             except Exception as e:
                 logger.api_exception('Tautulli APIv2 :: ' + traceback.format_exc())
                 self._api_response_code = 500
-                out['message'] = traceback.format_exc()
-                out['result'] = 'error'
+                out = {'response': {'result': 'error', 'message': str(e), 'data': None}}
+                try:
+                    if self._api_debug:
+                        out = json.dumps(out, indent=4, sort_keys=True, ensure_ascii=False)
+                    else:
+                        out = json.dumps(out, ensure_ascii=False)
+                except Exception:
+                    out = '{"response": {"result": "error", "message": "Serialization error", "data": null}}'
+                if self._api_callback is not None:
+                    cherrypy.response.headers['Content-Type'] = 'application/javascript'
+                    out = self._api_callback + '(' + out + ');'
+                return out.encode('utf-8')
 
         elif self._api_out_type == 'xml':
             cherrypy.response.headers['Content-Type'] = 'application/xml;charset=UTF-8'
