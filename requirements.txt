@@ -42,6 +42,15 @@ requests-oauthlib==2.0.0
 simplejson==3.19.3
 six==1.16.0
 SQLAlchemy==2.0.36
+
+# Modernization 2026 - Advanced Alchemy & Testing
+advanced-alchemy>=0.10.0
+pydantic>=2.0
+pytest>=8.0
+pytest-asyncio>=0.23
+factory-boy>=3.3
+httpx>=0.27
+
 tempora==5.7.0
 tokenize-rt==6.1.0
 tzdata==2024.2
