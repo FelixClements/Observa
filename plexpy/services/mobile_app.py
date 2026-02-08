@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 #  This file is part of Tautulli.
 #
@@ -168,6 +168,11 @@ def set_mobile_device_config(mobile_device_id=None, **kwargs):
 
 def delete_mobile_device(mobile_device_id=None, device_id=None):
     if mobile_device_id:
+        if str(mobile_device_id).isdigit():
+            mobile_device_id = int(mobile_device_id)
+        else:
+            logger.error("Tautulli MobileApp :: Unable to delete mobile device: invalid mobile_device_id %s." % mobile_device_id)
+            return False
         logger.debug("Tautulli MobileApp :: Deleting mobile_device_id %s from the database." % mobile_device_id)
         with session_scope() as session:
             session.execute(delete(MobileDevice).where(MobileDevice.id == mobile_device_id))
