@@ -158,7 +158,8 @@
 - [x] Added datatable_query support to NotifyLogRepository ✅ DONE (Feb 16, 2026)
 - [x] Added datatable_query support to NewsletterLogRepository ✅ DONE (Feb 16, 2026)
 - [x] Added deprecation warnings to database.py ✅ DONE (Feb 16, 2026)
-- [ ] `plexpy/db/datatables.py` → Use existing Repository.datatable_query()
+- [x] Migrated users.py get_datatables_user_login to repository ✅ DONE (Feb 16, 2026)
+- [ ] `plexpy/db/datatables.py` → Use existing Repository.datatable_query() (partial - get_datatables_user_login done)
 - [ ] `plexpy/db/datafactory.py` → Migrate complex aggregation queries to repositories
 - [ ] `plexpy/db/database.py` → Advanced Alchemy
 - [ ] String-based SQL queries → ORM/Core
