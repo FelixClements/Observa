@@ -22,10 +22,12 @@ Provides data access for Newsletter and NewsletterLog models.
 """
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func
+from sqlalchemy.orm import Session
 
 from plexpy.db.models import Newsletter, NewsletterLog
 from plexpy.db.repository.async_base import AdvancedAsyncRepository
+from plexpy.db.repository.base import Repository, DataTableParams, DataTableResponse
 
 
 class NewsletterRepository(AdvancedAsyncRepository[Newsletter]):
@@ -44,24 +46,54 @@ class NewsletterRepository(AdvancedAsyncRepository[Newsletter]):
         return list(result.scalars().all())
 
 
-class NewsletterLogRepository(AdvancedAsyncRepository[NewsletterLog]):
+class NewsletterLogRepository(Repository[NewsletterLog]):
     """Repository for NewsletterLog model."""
 
-    async def get_by_uuid(self, uuid: str) -> Optional[NewsletterLog]:
+    # Searchable columns for datatable queries
+    _SEARCHABLE_COLUMNS = [
+        NewsletterLog.agent_name,
+        NewsletterLog.notify_action,
+        NewsletterLog.subject_text,
+        NewsletterLog.body_text,
+        NewsletterLog.message_text,
+    ]
+
+    # Orderable columns for datatable queries
+    _ORDERABLE_COLUMNS = {
+        'id': NewsletterLog.id,
+        'timestamp': NewsletterLog.timestamp,
+        'newsletter_id': NewsletterLog.newsletter_id,
+        'agent_id': NewsletterLog.agent_id,
+        'agent_name': NewsletterLog.agent_name,
+        'notify_action': NewsletterLog.notify_action,
+        'subject_text': NewsletterLog.subject_text,
+        'body_text': NewsletterLog.body_text,
+        'message_text': NewsletterLog.message_text,
+        'start_date': NewsletterLog.start_date,
+        'end_date': NewsletterLog.end_date,
+        'start_time': NewsletterLog.start_time,
+        'end_time': NewsletterLog.end_time,
+        'uuid': NewsletterLog.uuid,
+        'filename': NewsletterLog.filename,
+        'email_msg_id': NewsletterLog.email_msg_id,
+        'success': NewsletterLog.success,
+    }
+
+    def get_by_uuid(self, uuid: str) -> Optional[NewsletterLog]:
         """Get newsletter log by UUID."""
         stmt = select(NewsletterLog).where(NewsletterLog.uuid == uuid)
-        result = await self.execute_statement(stmt)
+        result = self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_recent(self, limit: int = 100) -> list[NewsletterLog]:
+    def list_recent(self, limit: int = 100) -> list[NewsletterLog]:
         """List recent newsletter logs."""
         stmt = select(NewsletterLog).order_by(
             NewsletterLog.timestamp.desc()
         ).limit(limit)
-        result = await self.execute_statement(stmt)
+        result = self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_by_newsletter_id(self, newsletter_id: int, limit: int = 100) -> list[NewsletterLog]:
+    def get_by_newsletter_id(self, newsletter_id: int, limit: int = 100) -> list[NewsletterLog]:
         """Get newsletter logs by newsletter ID."""
         stmt = (
             select(NewsletterLog)
@@ -69,10 +101,10 @@ class NewsletterLogRepository(AdvancedAsyncRepository[NewsletterLog]):
             .order_by(NewsletterLog.timestamp.desc())
             .limit(limit)
         )
-        result = await self.execute_statement(stmt)
+        result = self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_by_status(self, status: str, limit: int = 100) -> list[NewsletterLog]:
+    def get_by_status(self, status: str, limit: int = 100) -> list[NewsletterLog]:
         """Get newsletter logs by status (e.g., 'failed', 'sent')."""
         stmt = (
             select(NewsletterLog)
@@ -80,21 +112,52 @@ class NewsletterLogRepository(AdvancedAsyncRepository[NewsletterLog]):
             .order_by(NewsletterLog.timestamp.desc())
             .limit(limit)
         )
-        result = await self.execute_statement(stmt)
+        result = self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def count_by_status(self, status: str) -> int:
+    def count_by_status(self, status: str) -> int:
         """Count newsletter logs by status."""
-        from sqlalchemy import func
         stmt = select(func.count()).select_from(NewsletterLog).where(NewsletterLog.status == status)
-        result = await self.execute_statement(stmt)
+        result = self.session.execute(stmt)
         return result.scalar() or 0
 
-    async def delete_old_logs(self, before_timestamp: int) -> int:
+    def delete_old_logs(self, before_timestamp: int) -> int:
         """Delete newsletter logs older than timestamp. Returns count of deleted rows."""
         stmt = NewsletterLog.__table__.delete().where(NewsletterLog.timestamp < before_timestamp)
-        result = await self.execute_statement(stmt)
+        result = self.session.execute(stmt)
         return result.rowcount
+
+    def datatable_query(
+        self,
+        params: DataTableParams,
+        searchable_columns: list = None,
+        orderable_columns: dict = None,
+        formatter=None,
+        extra_filters: list = None,
+    ) -> DataTableResponse:
+        """
+        Execute a datatable query with search, sort, and pagination.
+
+        This method provides the same functionality as the legacy datatables.py
+        but uses the repository pattern with SQLAlchemy ORM.
+
+        Args:
+            params: DataTableParams with draw, start, length, search, order, columns
+            searchable_columns: Columns to search (optional, uses default)
+            orderable_columns: Columns to sort by (optional, uses default)
+            formatter: Custom row formatter (optional)
+            extra_filters: Additional SQLAlchemy filters (optional)
+
+        Returns:
+            DataTableResponse with recordsTotal, recordsFiltered, data, draw
+        """
+        return super().datatable_query(
+            params=params,
+            searchable_columns=searchable_columns or self._SEARCHABLE_COLUMNS,
+            orderable_columns=orderable_columns or self._ORDERABLE_COLUMNS,
+            formatter=formatter,
+            extra_filters=extra_filters,
+        )
 
 
 __all__ = [
