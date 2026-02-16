@@ -135,6 +135,10 @@
   - `plexpy/integrations/plextv.py` - added _get_config() helper
   - `plexpy/integrations/pmsconnect.py` - added _get_config() helper
   - `plexpy/integrations/http_handler.py` - added _get_config() helper
+- [x] Refactored remaining Python files to use config DI ✅ DONE (Feb 16, 2026)
+  - `plexpy/util/helpers.py` - added _get_config() helper, replaced 40+ plexpy.CONFIG references
+  - `plexpy/db/datafactory.py` - replaced plexpy.CONFIG with _config() helper
+  - `plexpy/app/main.py` - added _get_config() helper
 - [ ] Module-level side effects in bootstrap
 
 #### Legacy Database Patterns (MIGRATE)
