@@ -2467,12 +2467,50 @@ class DataFactory(object):
 
     def get_total_duration(self, custom_where=None):
         try:
-            total_duration = raw_pg.fetch_total_duration(custom_where=custom_where)
+            from plexpy.db.models import SessionHistory, SessionHistoryMetadata, SessionHistoryMediaInfo
+            from plexpy.db.queries.raw_pg import _bind_params
+
+            # Build WHERE clause from custom_where
+            where_clause = ""
+            params = {}
+            if custom_where:
+                where_clause, params = _bind_params("", [v for _, v in custom_where])
+                where_parts = []
+                for clause, _ in custom_where:
+                    where_parts.append(clause)
+                where_clause = "WHERE " + " AND ".join(where_parts)
+
+            # Build SQLAlchemy query
+            duration_expr = case(
+                (SessionHistory.stopped > 0,
+                 SessionHistory.stopped - SessionHistory.started),
+                else_=0
+            ) - func.coalesce(SessionHistory.paused_counter, 0)
+
+            query = (
+                select(func.sum(duration_expr))
+                .select_from(SessionHistory)
+                .join(SessionHistoryMetadata, SessionHistoryMetadata.id == SessionHistory.id)
+                .join(SessionHistoryMediaInfo, SessionHistoryMediaInfo.id == SessionHistory.id)
+            )
+
+            # Add WHERE clause if custom_where provided
+            if custom_where:
+                for clause, value in custom_where:
+                    # Parse simple column filters
+                    if '.' in clause:
+                        table, column = clause.split('.')[-2:]
+                        if table == 'session_history':
+                            query = query.where(getattr(SessionHistory, column) == value)
+
+            with session_scope() as db_session:
+                result = db_session.execute(query)
+                total_duration = result.scalar()
+
+            return total_duration if total_duration else 0
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_total_duration: %s." % e)
             return None
-
-        return total_duration
 
     def get_session_ip(self, session_key=''):
         ip_address = 'N/A'
@@ -3155,31 +3193,26 @@ class DataFactory(object):
                 )
 
     def get_notification_log(self, kwargs=None):
-        data_tables = datatables.DataTables()
+        from plexpy.db.repository.notifications import NotifyLogRepository
+        from plexpy.db.repository.base import DataTableParams
 
-        columns = ["notify_log.id",
-                   "notify_log.timestamp",
-                   "notify_log.session_key",
-                   "notify_log.rating_key",
-                   "notify_log.user_id",
-                   "notify_log.user",
-                   "notify_log.notifier_id",
-                   "notify_log.agent_id",
-                   "notify_log.agent_name",
-                   "notify_log.notify_action",
-                   "notify_log.subject_text",
-                   "notify_log.body_text",
-                   "notify_log.success"
-                   ]
+        if kwargs is None:
+            kwargs = {}
+
+        # Map legacy DataTables parameters to repository params
+        params = DataTableParams(
+            draw=kwargs.get('draw', 1),
+            start=kwargs.get('start', 0),
+            length=kwargs.get('length', 25),
+            search=kwargs.get('search[value]', ''),
+            order=kwargs.get('order', []),
+            columns=kwargs.get('columns', []),
+        )
+
         try:
-            query = data_tables.ssp_query(table_name='notify_log',
-                                          columns=columns,
-                                          custom_where=[],
-                                          group_by=[],
-                                          join_types=[],
-                                          join_tables=[],
-                                          join_evals=[],
-                                          kwargs=kwargs)
+            with session_scope() as db_session:
+                repo = NotifyLogRepository(session=db_session)
+                result = repo.datatable_query(params)
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_notification_log: %s." % e)
             return {'recordsFiltered': 0,
@@ -3187,7 +3220,7 @@ class DataFactory(object):
                     'draw': 0,
                     'data': []}
 
-        notifications = query['result']
+        notifications = result.data
 
         rows = []
         for item in notifications:
@@ -3213,10 +3246,10 @@ class DataFactory(object):
 
             rows.append(row)
 
-        dict = {'recordsFiltered': query['filteredCount'],
-                'recordsTotal': query['totalCount'],
+        dict = {'recordsFiltered': result.recordsFiltered,
+                'recordsTotal': result.recordsTotal,
                 'data': rows,
-                'draw': query['draw']
+                'draw': result.draw
                 }
 
         return dict
@@ -3226,37 +3259,32 @@ class DataFactory(object):
             logger.info("Tautulli DataFactory :: Clearing notification logs from database.")
             with session_scope() as db_session:
                 db_session.execute(delete(NotifyLog))
-            raw_pg.vacuum()
             return True
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for delete_notification_log: %s." % e)
             return False
 
     def get_newsletter_log(self, kwargs=None):
-        data_tables = datatables.DataTables()
+        from plexpy.db.repository.newsletters import NewsletterLogRepository
+        from plexpy.db.repository.base import DataTableParams
 
-        columns = ["newsletter_log.id",
-                   "newsletter_log.timestamp",
-                   "newsletter_log.newsletter_id",
-                   "newsletter_log.agent_id",
-                   "newsletter_log.agent_name",
-                   "newsletter_log.notify_action",
-                   "newsletter_log.subject_text",
-                   "newsletter_log.body_text",
-                   "newsletter_log.start_date",
-                   "newsletter_log.end_date",
-                   "newsletter_log.uuid",
-                   "newsletter_log.success"
-                   ]
+        if kwargs is None:
+            kwargs = {}
+
+        # Map legacy DataTables parameters to repository params
+        params = DataTableParams(
+            draw=kwargs.get('draw', 1),
+            start=kwargs.get('start', 0),
+            length=kwargs.get('length', 25),
+            search=kwargs.get('search[value]', ''),
+            order=kwargs.get('order', []),
+            columns=kwargs.get('columns', []),
+        )
+
         try:
-            query = data_tables.ssp_query(table_name='newsletter_log',
-                                          columns=columns,
-                                          custom_where=[],
-                                          group_by=[],
-                                          join_types=[],
-                                          join_tables=[],
-                                          join_evals=[],
-                                          kwargs=kwargs)
+            with session_scope() as db_session:
+                repo = NewsletterLogRepository(session=db_session)
+                result = repo.datatable_query(params)
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_newsletter_log: %s." % e)
             return {'recordsFiltered': 0,
@@ -3264,7 +3292,7 @@ class DataFactory(object):
                     'draw': 0,
                     'data': []}
 
-        newsletters = query['result']
+        newsletters = result.data
 
         rows = []
         for item in newsletters:
@@ -3284,10 +3312,10 @@ class DataFactory(object):
 
             rows.append(row)
 
-        dict = {'recordsFiltered': query['filteredCount'],
-                'recordsTotal': query['totalCount'],
+        dict = {'recordsFiltered': result.recordsFiltered,
+                'recordsTotal': result.recordsTotal,
                 'data': rows,
-                'draw': query['draw']
+                'draw': result.draw
                 }
 
         return dict
@@ -3297,7 +3325,6 @@ class DataFactory(object):
             logger.info("Tautulli DataFactory :: Clearing newsletter logs from database.")
             with session_scope() as db_session:
                 db_session.execute(delete(NewsletterLog))
-            raw_pg.vacuum()
             return True
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for delete_newsletter_log: %s." % e)
