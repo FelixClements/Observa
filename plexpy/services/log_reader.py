@@ -20,12 +20,20 @@ from io import open
 import os
 
 import plexpy
+from plexpy.config import get_config
 from plexpy.util import helpers
 from plexpy.util import logger
 
 
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
+
+
 def list_plex_logs():
-    logs_dir = plexpy.CONFIG.PMS_LOGS_FOLDER
+    logs_dir = _get_config().PMS_LOGS_FOLDER
 
     if not logs_dir or logs_dir and not os.path.exists(logs_dir):
         return []
@@ -44,11 +52,11 @@ def list_plex_logs():
 
 
 def get_log_tail(window=20, parsed=True, log_file=''):
-    if not plexpy.CONFIG.PMS_LOGS_FOLDER:
+    if not _get_config().PMS_LOGS_FOLDER:
         return []
 
     log_file = (log_file or 'Plex Media Server') + '.log'
-    log_file = os.path.join(plexpy.CONFIG.PMS_LOGS_FOLDER, log_file)
+    log_file = os.path.join(_get_config().PMS_LOGS_FOLDER, log_file)
 
     try:
         logfile = open(log_file, 'r', encoding='utf-8')

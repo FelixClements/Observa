@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 #  This file is part of Tautulli.
 #
@@ -24,11 +24,19 @@ import email.utils
 from sqlalchemy import select, update
 
 import plexpy
+from plexpy.config import get_config
 from plexpy.services import newsletters
 from plexpy.db.models import Newsletter, NewsletterLog
 from plexpy.db.session import session_scope
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 NEWSLETTER_SCHED = None
@@ -250,7 +258,7 @@ def get_newsletter(newsletter_uuid=None, newsletter_id_name=None):
                                                                               end_date.replace('-', ''),
                                                                               newsletter_uuid)
 
-        newsletter_folder = plexpy.CONFIG.NEWSLETTER_DIR or os.path.join(plexpy.DATA_DIR, 'newsletters')
+        newsletter_folder = _get_config().NEWSLETTER_DIR or os.path.join(plexpy.DATA_DIR, 'newsletters')
         newsletter_file_fp = os.path.join(newsletter_folder, newsletter_file)
 
         if newsletter_file in os.listdir(newsletter_folder):

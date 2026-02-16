@@ -27,6 +27,11 @@ from plexpy.web import session
 from plexpy.integrations.plex import Plex
 from plexpy.util import helpers
 from plexpy.util import logger
+from plexpy.integrations.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 def get_server_resources(return_presence=False, return_server=False, return_info=False, **kwargs):
@@ -34,16 +39,16 @@ def get_server_resources(return_presence=False, return_server=False, return_info
         logger.info("Tautulli PlexTV :: Requesting resources for server...")
 
     server = {'pms_name': helpers.pms_name(),
-              'pms_version': plexpy.CONFIG.PMS_VERSION,
-              'pms_platform': plexpy.CONFIG.PMS_PLATFORM,
-              'pms_ip': plexpy.CONFIG.PMS_IP,
-              'pms_port': plexpy.CONFIG.PMS_PORT,
-              'pms_ssl': plexpy.CONFIG.PMS_SSL,
-              'pms_is_cloud': plexpy.CONFIG.PMS_IS_CLOUD,
-              'pms_url': plexpy.CONFIG.PMS_URL,
-              'pms_url_manual': plexpy.CONFIG.PMS_URL_MANUAL,
-              'pms_identifier': plexpy.CONFIG.PMS_IDENTIFIER,
-              'pms_plexpass': plexpy.CONFIG.PMS_PLEXPASS
+              'pms_version': _get_config().PMS_VERSION,
+              'pms_platform': _get_config().PMS_PLATFORM,
+              'pms_ip': _get_config().PMS_IP,
+              'pms_port': _get_config().PMS_PORT,
+              'pms_ssl': _get_config().PMS_SSL,
+              'pms_is_cloud': _get_config().PMS_IS_CLOUD,
+              'pms_url': _get_config().PMS_URL,
+              'pms_url_manual': _get_config().PMS_URL_MANUAL,
+              'pms_identifier': _get_config().PMS_IDENTIFIER,
+              'pms_plexpass': _get_config().PMS_PLEXPASS
               }
 
     if return_info:
@@ -113,8 +118,8 @@ def get_server_resources(return_presence=False, return_server=False, return_info
     logger.info("Tautulli PlexTV :: Selected server: %s (%s) (%s - Version %s)",
                 server['pms_name'], server['pms_url'], server['pms_platform'], server['pms_version'])
 
-    plexpy.CONFIG.process_kwargs(server)
-    plexpy.CONFIG.write()
+    _get_config().process_kwargs(server)
+    _get_config().write()
 
 
 def notify_token_expired():
@@ -133,8 +138,8 @@ class PlexTV(object):
         self.token = token
 
         self.urls = 'https://plex.tv'
-        self.timeout = plexpy.CONFIG.PMS_TIMEOUT
-        self.ssl_verify = plexpy.CONFIG.VERIFY_SSL_CERT
+        self.timeout = _get_config().PMS_TIMEOUT
+        self.ssl_verify = _get_config().VERIFY_SSL_CERT
 
         if self.username is None and self.password is None:
             if not self.token:
@@ -144,7 +149,7 @@ class PlexTV(object):
                     user_tokens = user_data.get_tokens(user_id=session.get_session_user_id())
                     self.token = user_tokens['server_token']
                 else:
-                    self.token = plexpy.CONFIG.PMS_TOKEN
+                    self.token = _get_config().PMS_TOKEN
 
             if not self.token:
                 logger.error("Tautulli PlexTV :: PlexTV called, but no token provided.")
@@ -166,7 +171,7 @@ class PlexTV(object):
             return None
 
         for a in xml_head:
-            if helpers.get_xml_attr(a, 'clientIdentifier') == plexpy.CONFIG.PMS_IDENTIFIER \
+            if helpers.get_xml_attr(a, 'clientIdentifier') == _get_config().PMS_IDENTIFIER \
                     and 'server' in helpers.get_xml_attr(a, 'provides'):
                 server_token = helpers.get_xml_attr(a, 'accessToken')
                 break
@@ -341,7 +346,7 @@ class PlexTV(object):
     def get_full_users_list(self):
         own_account = self.get_plextv_user_details(output_format='xml')
         friends_list = self.get_plextv_friends(output_format='xml')
-        shared_servers = self.get_plextv_shared_servers(machine_id=plexpy.CONFIG.PMS_IDENTIFIER,
+        shared_servers = self.get_plextv_shared_servers(machine_id=_get_config().PMS_IDENTIFIER,
                                                         output_format='xml')
 
         users_list = []
@@ -429,7 +434,7 @@ class PlexTV(object):
                          rating_key_filter=None, sync_id_filter=None):
 
         if not machine_id:
-            machine_id = plexpy.CONFIG.PMS_IDENTIFIER
+            machine_id = _get_config().PMS_IDENTIFIER
 
         if isinstance(rating_key_filter, list):
             rating_key_filter = [str(k) for k in rating_key_filter]
@@ -657,7 +662,7 @@ class PlexTV(object):
             return {}
 
         for a in xml_head:
-            if helpers.get_xml_attr(a, 'machineIdentifier') == plexpy.CONFIG.PMS_IDENTIFIER:
+            if helpers.get_xml_attr(a, 'machineIdentifier') == _get_config().PMS_IDENTIFIER:
                 server_times = {"created_at": helpers.get_xml_attr(a, 'createdAt'),
                                 "updated_at": helpers.get_xml_attr(a, 'updatedAt'),
                                 "version": helpers.get_xml_attr(a, 'version')
@@ -778,7 +783,7 @@ class PlexTV(object):
             return {}
 
         # Get the updates for the platform
-        pms_platform = common.PMS_PLATFORM_NAME_OVERRIDES.get(plexpy.CONFIG.PMS_PLATFORM, plexpy.CONFIG.PMS_PLATFORM)
+        pms_platform = common.PMS_PLATFORM_NAME_OVERRIDES.get(_get_config().PMS_PLATFORM, _get_config().PMS_PLATFORM)
         platform_downloads = available_downloads.get('computer').get(pms_platform) or \
             available_downloads.get('nas').get(pms_platform)
 
@@ -787,12 +792,12 @@ class PlexTV(object):
                          % pms_platform)
             return {}
 
-        v_old = helpers.cast_to_int("".join(v.zfill(4) for v in plexpy.CONFIG.PMS_VERSION.split('-')[0].split('.')[:4]))
+        v_old = helpers.cast_to_int("".join(v.zfill(4) for v in _get_config().PMS_VERSION.split('-')[0].split('.')[:4]))
         v_new = helpers.cast_to_int("".join(v.zfill(4) for v in platform_downloads.get('version', '').split('-')[0].split('.')[:4]))
 
         if not v_old:
             logger.error("Tautulli PlexTV :: Unable to retrieve Plex updates: Invalid current server version: %s."
-                         % plexpy.CONFIG.PMS_VERSION)
+                         % _get_config().PMS_VERSION)
             return {}
         if not v_new:
             logger.error("Tautulli PlexTV :: Unable to retrieve Plex updates: Invalid new server version: %s."
@@ -801,8 +806,8 @@ class PlexTV(object):
 
         # Get proper download
         releases = platform_downloads.get('releases', [{}])
-        release = next((r for r in releases if r['distro'] == plexpy.CONFIG.PMS_UPDATE_DISTRO and
-                        r['build'] == plexpy.CONFIG.PMS_UPDATE_DISTRO_BUILD), releases[0])
+        release = next((r for r in releases if r['distro'] == _get_config().PMS_UPDATE_DISTRO and
+                        r['build'] == _get_config().PMS_UPDATE_DISTRO_BUILD), releases[0])
 
         download_info = {'update_available': v_new > v_old,
                          'platform': platform_downloads.get('name'),
@@ -830,13 +835,13 @@ class PlexTV(object):
             return False
 
         if subscription and helpers.get_xml_attr(subscription[0], 'active') == '1':
-            plexpy.CONFIG.__setattr__('PMS_PLEXPASS', 1)
-            plexpy.CONFIG.write()
+            _get_config().__setattr__('PMS_PLEXPASS', 1)
+            _get_config().write()
             return True
         else:
             logger.debug("Tautulli PlexTV :: Plex Pass subscription not found.")
-            plexpy.CONFIG.__setattr__('PMS_PLEXPASS', 0)
-            plexpy.CONFIG.write()
+            _get_config().__setattr__('PMS_PLEXPASS', 0)
+            _get_config().write()
             return False
 
     def get_devices_list(self):
@@ -879,7 +884,7 @@ class PlexTV(object):
         for info in status_info:
             servers = info.getElementsByTagName('server')
             for s in servers:
-                if helpers.get_xml_attr(s, 'address') == plexpy.CONFIG.PMS_IP:
+                if helpers.get_xml_attr(s, 'address') == _get_config().PMS_IP:
                     if helpers.get_xml_attr(info, 'running') == '1':
                         return True
                     else:

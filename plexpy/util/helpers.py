@@ -25,12 +25,11 @@ from collections import OrderedDict
 from datetime import date, datetime, timezone
 from functools import reduce, wraps
 from itertools import groupby
-from future.moves.itertools import islice, zip_longest
+from itertools import islice, zip_longest
 from ipaddress import ip_address, ip_network, IPv4Address
 import ipwhois
 import ipwhois.exceptions
 import ipwhois.utils
-from IPy import IP
 import json
 import math
 import operator
@@ -702,11 +701,14 @@ def sanitize(obj):
 
 def is_public_ip(host):
     ip = is_valid_ip(get_ip(host))
-    ip_version = ip.version()
-    ip_type = ip.iptype()
-    if ip and ip_type != 'LOOPBACK' and (
-            ip_version == 4 and ip_type == 'PUBLIC' or
-            ip_version == 6 and 'LOCAL' not in ip_type):
+    if not ip:
+        return False
+    ip_version = ip.version
+    is_private = ip.is_private
+    is_loopback = ip.is_loopback
+    if ip_version == 4 and not is_private and not is_loopback:
+        return True
+    if ip_version == 6 and not is_private and not is_loopback:
         return True
     return False
 
@@ -726,9 +728,7 @@ def get_ip(host):
 
 def is_valid_ip(address):
     try:
-        return IP(address)
-    except TypeError:
-        return False
+        return ip_address(address)
     except ValueError:
         return False
 

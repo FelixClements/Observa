@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 #  This file is part of Tautulli.
 #
@@ -20,6 +20,11 @@ import cherrypy
 import plexpy
 from plexpy.app import common
 from plexpy.services import users
+from plexpy.web.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 def get_session_info():
@@ -61,7 +66,7 @@ def get_session_user_token():
         session_user_tokens = users.Users().get_tokens(_session['user_id'])
         user_token = session_user_tokens['server_token']
     else:
-        user_token = plexpy.CONFIG.PMS_TOKEN
+        user_token = _get_config().PMS_TOKEN
 
     return user_token
 

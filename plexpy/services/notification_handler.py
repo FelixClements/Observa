@@ -33,7 +33,15 @@ import musicbrainzngs
 from sqlalchemy import Integer, insert, select, update
 
 import plexpy
+from plexpy.config import get_config
 from plexpy.app import common
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 from plexpy.db import datafactory
 from plexpy.db import queries
 from plexpy.integrations import pmsconnect
@@ -210,33 +218,33 @@ def notify_conditions(notify_action=None, stream_data=None, timeline_data=None, 
             if result:
                 user_sessions = [s for s in result['sessions'] if s['user_id'] == stream_data['user_id']]
 
-            if plexpy.CONFIG.NOTIFY_CONCURRENT_BY_IP:
+            if _get_config().NOTIFY_CONCURRENT_BY_IP:
                 ip_addresses = set()
                 for s in user_sessions:
                     if helpers.ip_type(s['ip_address']) == 'IPv6':
                         ip_addresses.add(helpers.get_ipv6_network_address(s['ip_address']))
                     elif helpers.ip_type(s['ip_address']) == 'IPv4':
                         ip_addresses.add(s['ip_address'])
-                evaluated = len(ip_addresses) >= plexpy.CONFIG.NOTIFY_CONCURRENT_THRESHOLD
+                evaluated = len(ip_addresses) >= _get_config().NOTIFY_CONCURRENT_THRESHOLD
             else:
-                evaluated = len(user_sessions) >= plexpy.CONFIG.NOTIFY_CONCURRENT_THRESHOLD
+                evaluated = len(user_sessions) >= _get_config().NOTIFY_CONCURRENT_THRESHOLD
 
         elif notify_action == 'on_newdevice':
             data_factory = datafactory.DataFactory()
             user_devices = data_factory.get_user_devices(user_id=stream_data['user_id'],
-                                                         history_only=not plexpy.CONFIG.NOTIFY_NEW_DEVICE_INITIAL_ONLY)
+                                                         history_only=not _get_config().NOTIFY_NEW_DEVICE_INITIAL_ONLY)
             evaluated = stream_data['machine_id'] not in user_devices
 
         elif stream_data['media_type'] in ('movie', 'episode', 'clip'):
             progress_percent = helpers.get_percent(stream_data['view_offset'], stream_data['duration'])
 
             if notify_action == 'on_stop':
-                evaluated = (plexpy.CONFIG.NOTIFY_CONSECUTIVE or
-                    (stream_data['media_type'] == 'movie' and progress_percent < plexpy.CONFIG.MOVIE_WATCHED_PERCENT) or 
-                    (stream_data['media_type'] == 'episode' and progress_percent < plexpy.CONFIG.TV_WATCHED_PERCENT))
+                evaluated = (_get_config().NOTIFY_CONSECUTIVE or
+                    (stream_data['media_type'] == 'movie' and progress_percent < _get_config().MOVIE_WATCHED_PERCENT) or 
+                    (stream_data['media_type'] == 'episode' and progress_percent < _get_config().TV_WATCHED_PERCENT))
 
             elif notify_action == 'on_resume':
-                evaluated = plexpy.CONFIG.NOTIFY_CONSECUTIVE or progress_percent < 99
+                evaluated = _get_config().NOTIFY_CONSECUTIVE or progress_percent < 99
 
             # All other activity notify actions
             else:
@@ -263,19 +271,19 @@ def notify_conditions(notify_action=None, stream_data=None, timeline_data=None, 
 
     elif notify_action == 'on_pmsupdate':
         evaluated = True
-        if not plexpy.CONFIG.NOTIFY_SERVER_UPDATE_REPEAT:
+        if not _get_config().NOTIFY_SERVER_UPDATE_REPEAT:
             evaluated = not check_nofity_tag(notify_action=notify_action,
                                              tag=kwargs['pms_download_info']['version'])
 
     elif notify_action == 'on_plexpyupdate':
         evaluated = True
-        if not plexpy.CONFIG.NOTIFY_PLEXPY_UPDATE_REPEAT:
+        if not _get_config().NOTIFY_PLEXPY_UPDATE_REPEAT:
             evaluated = not check_nofity_tag(notify_action=notify_action,
                                              tag=kwargs['plexpy_download_info']['tag_name'])
 
     elif notify_action == 'on_tokenexpired':
         evaluated = not check_nofity_tag(notify_action=notify_action,
-                                         tag=hashlib.sha256(plexpy.CONFIG.PMS_TOKEN.encode('utf-8')).hexdigest()[:10])
+                                         tag=hashlib.sha256(_get_config().PMS_TOKEN.encode('utf-8')).hexdigest()[:10])
 
     # Server notifications
     else:
@@ -561,7 +569,7 @@ def set_notify_state(notifier, notify_action, subject='', body='', script_args='
         elif notify_action == 'on_plexpyupdate':
             values['tag'] = parameters['tautulli_update_version']
         elif notify_action == 'on_tokenexpired':
-            values['tag'] = hashlib.sha256(plexpy.CONFIG.PMS_TOKEN.encode('utf-8')).hexdigest()[:10]
+            values['tag'] = hashlib.sha256(_get_config().PMS_TOKEN.encode('utf-8')).hexdigest()[:10]
 
         _normalize_int_columns(NotifyLogModel, keys)
         _normalize_int_columns(NotifyLogModel, values)
@@ -607,9 +615,9 @@ def check_nofity_tag(notify_action, tag):
 
 def build_media_notify_params(notify_action=None, session=None, timeline=None, manual_trigger=False, **kwargs):
     # Get time formats
-    date_format = helpers.momentjs_to_arrow(plexpy.CONFIG.DATE_FORMAT)
-    time_format = helpers.momentjs_to_arrow(plexpy.CONFIG.TIME_FORMAT)
-    duration_format = helpers.momentjs_to_arrow(plexpy.CONFIG.TIME_FORMAT, duration=True)
+    date_format = helpers.momentjs_to_arrow(_get_config().DATE_FORMAT)
+    time_format = helpers.momentjs_to_arrow(_get_config().TIME_FORMAT)
+    duration_format = helpers.momentjs_to_arrow(_get_config().TIME_FORMAT, duration=True)
 
     # Get metadata for the item
     if session:
@@ -732,8 +740,8 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
         plex_web_rating_key = notify_params['rating_key']
 
     notify_params['plex_url'] = '{web_url}#!/server/{pms_identifier}/details?key=%2Flibrary%2Fmetadata%2F{rating_key}'.format(
-        web_url=plexpy.CONFIG.PMS_WEB_URL,
-        pms_identifier=plexpy.CONFIG.PMS_IDENTIFIER,
+        web_url=_get_config().PMS_WEB_URL,
+        pms_identifier=_get_config().PMS_IDENTIFIER,
         rating_key=plex_web_rating_key)
 
     # Check external guids
@@ -802,7 +810,7 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
         notify_params['anidb_url'] = 'https://anidb.net/anime/' + notify_params['anidb_id']
 
     # Get TheMovieDB info (for movies and tv only)
-    if plexpy.CONFIG.THEMOVIEDB_LOOKUP and notify_params['media_type'] in ('movie', 'show', 'season', 'episode'):
+    if _get_config().THEMOVIEDB_LOOKUP and notify_params['media_type'] in ('movie', 'show', 'season', 'episode'):
         if notify_params.get('themoviedb_id'):
             if notify_params['media_type'] == 'episode':
                 lookup_key = notify_params['grandparent_rating_key']
@@ -852,7 +860,7 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
                     notify_params['themoviedb_id'], 'show' if lookup_media_type == 'tv' else 'movie')
 
     # Get TVmaze info (for tv shows only)
-    if plexpy.CONFIG.TVMAZE_LOOKUP and notify_params['media_type'] in ('show', 'season', 'episode'):
+    if _get_config().TVMAZE_LOOKUP and notify_params['media_type'] in ('show', 'season', 'episode'):
         if notify_params.get('thetvdb_id') or notify_params.get('imdb_id') or notify_params.get('plex_id'):
             if notify_params['media_type'] == 'episode':
                 lookup_key = notify_params['grandparent_rating_key']
@@ -879,7 +887,7 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
                 notify_params['trakt_url'] = 'https://trakt.tv/search/imdb/' + notify_params['imdb_id']
 
     # Get MusicBrainz info (for music only)
-    if plexpy.CONFIG.MUSICBRAINZ_LOOKUP and notify_params['media_type'] in ('artist', 'album', 'track'):
+    if _get_config().MUSICBRAINZ_LOOKUP and notify_params['media_type'] in ('artist', 'album', 'track'):
         artist = release = recording = tracks = tnum = None
         if notify_params['media_type'] == 'artist':
             musicbrainz_type = 'artist'
@@ -947,13 +955,13 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
         img_info = get_img_info(img=poster_thumb, rating_key=poster_key, title=poster_title, fallback=fallback)
         poster_info = {'poster_title': img_info['img_title'], 'poster_url': img_info['img_url']}
         notify_params.update(poster_info)
-    elif img_service == 'self-hosted' and plexpy.CONFIG.HTTP_BASE_URL:
+    elif img_service == 'self-hosted' and _get_config().HTTP_BASE_URL:
         img_hash = set_hash_image_info(img=poster_thumb, fallback=fallback)
         poster_info = {'poster_title': poster_title,
-                       'poster_url': plexpy.CONFIG.HTTP_BASE_URL + plexpy.HTTP_ROOT + 'image/' + img_hash}
+                       'poster_url': _get_config().HTTP_BASE_URL + plexpy.HTTP_ROOT + 'image/' + img_hash}
         notify_params.update(poster_info)
 
-    if ((manual_trigger or plexpy.CONFIG.NOTIFY_GROUP_RECENTLY_ADDED_GRANDPARENT)
+    if ((manual_trigger or _get_config().NOTIFY_GROUP_RECENTLY_ADDED_GRANDPARENT)
         and notify_params['media_type'] in ('show', 'artist')):
         show_name = notify_params['title']
         season_name = ''
@@ -976,7 +984,7 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
 
         show_year = notify_params['year']
 
-    elif ((manual_trigger or plexpy.CONFIG.NOTIFY_GROUP_RECENTLY_ADDED_PARENT)
+    elif ((manual_trigger or _get_config().NOTIFY_GROUP_RECENTLY_ADDED_PARENT)
           and notify_params['media_type'] in ('season', 'album')):
         show_name = notify_params['parent_title']
         season_name = notify_params['title']
@@ -1040,16 +1048,16 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
     available_params = {
         # Global parameters
         'tautulli_version': common.RELEASE,
-        'tautulli_remote': plexpy.CONFIG.GIT_REMOTE,
-        'tautulli_branch': plexpy.CONFIG.GIT_BRANCH,
+        'tautulli_remote': _get_config().GIT_REMOTE,
+        'tautulli_branch': _get_config().GIT_BRANCH,
         'tautulli_commit': plexpy.CURRENT_VERSION,
         'server_name': helpers.pms_name(),
-        'server_ip': plexpy.CONFIG.PMS_IP,
-        'server_port': plexpy.CONFIG.PMS_PORT,
-        'server_url': plexpy.CONFIG.PMS_URL,
-        'server_machine_id': plexpy.CONFIG.PMS_IDENTIFIER,
-        'server_platform': plexpy.CONFIG.PMS_PLATFORM,
-        'server_version': plexpy.CONFIG.PMS_VERSION,
+        'server_ip': _get_config().PMS_IP,
+        'server_port': _get_config().PMS_PORT,
+        'server_url': _get_config().PMS_URL,
+        'server_machine_id': _get_config().PMS_IDENTIFIER,
+        'server_platform': _get_config().PMS_PLATFORM,
+        'server_version': _get_config().PMS_VERSION,
         'action': notify_action.split('on_')[-1],
         'current_year': now.year,
         'current_month': now.month,
@@ -1330,8 +1338,8 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
 
 def build_server_notify_params(notify_action=None, **kwargs):
     # Get time formats
-    date_format = plexpy.CONFIG.DATE_FORMAT.replace('Do','')
-    time_format = plexpy.CONFIG.TIME_FORMAT.replace('Do','')
+    date_format = _get_config().DATE_FORMAT.replace('Do','')
+    time_format = _get_config().TIME_FORMAT.replace('Do','')
 
     update_channel = pmsconnect.PmsConnect().get_server_update_channel()
 
@@ -1345,16 +1353,16 @@ def build_server_notify_params(notify_action=None, **kwargs):
     available_params = {
         # Global parameters
         'tautulli_version': common.RELEASE,
-        'tautulli_remote': plexpy.CONFIG.GIT_REMOTE,
-        'tautulli_branch': plexpy.CONFIG.GIT_BRANCH,
+        'tautulli_remote': _get_config().GIT_REMOTE,
+        'tautulli_branch': _get_config().GIT_BRANCH,
         'tautulli_commit': plexpy.CURRENT_VERSION,
         'server_name': helpers.pms_name(),
-        'server_ip': plexpy.CONFIG.PMS_IP,
-        'server_port': plexpy.CONFIG.PMS_PORT,
-        'server_url': plexpy.CONFIG.PMS_URL,
-        'server_platform': plexpy.CONFIG.PMS_PLATFORM,
-        'server_version': plexpy.CONFIG.PMS_VERSION,
-        'server_machine_id': plexpy.CONFIG.PMS_IDENTIFIER,
+        'server_ip': _get_config().PMS_IP,
+        'server_port': _get_config().PMS_PORT,
+        'server_url': _get_config().PMS_URL,
+        'server_platform': _get_config().PMS_PLATFORM,
+        'server_version': _get_config().PMS_VERSION,
+        'server_machine_id': _get_config().PMS_IDENTIFIER,
         'action': notify_action.split('on_')[-1],
         'current_year': now.year,
         'current_month': now.month,
@@ -1706,7 +1714,7 @@ def set_hash_image_info(img=None, rating_key=None, width=750, height=1000,
             rating_key = img_rating_key
 
     img_string = '{}.{}.{}.{}.{}.{}.{}.{}'.format(
-        plexpy.CONFIG.PMS_UUID, img, rating_key, width, height, opacity, background, blur, fallback)
+        _get_config().PMS_UUID, img, rating_key, width, height, opacity, background, blur, fallback)
     img_hash = hashlib.sha256(img_string.encode('utf-8')).hexdigest()
 
     if add_to_db:
@@ -1826,7 +1834,7 @@ def lookup_themoviedb_by_id(rating_key=None, thetvdb_id=None, imdb_id=None, titl
         else:
             logger.debug("Tautulli NotificationHandler :: Looking up The Movie Database info for '{} ({})'.".format(title, year))
 
-        params = {'api_key': plexpy.CONFIG.THEMOVIEDB_APIKEY}
+        params = {'api_key': _get_config().THEMOVIEDB_APIKEY}
 
         if thetvdb_id or imdb_id:
             params['external_source'] = 'tvdb_id' if thetvdb_id else 'imdb_id'
@@ -1906,7 +1914,7 @@ def get_themoviedb_info(rating_key=None, media_type=None, themoviedb_id=None):
 
     logger.debug("Tautulli NotificationHandler :: Looking up The Movie Database info for themoviedb_id '{}'.".format(themoviedb_id))
 
-    params = {'api_key': plexpy.CONFIG.THEMOVIEDB_APIKEY}
+    params = {'api_key': _get_config().THEMOVIEDB_APIKEY}
     response, err_msg, req_msg = request.request_response2('https://api.themoviedb.org/3/{}/{}'.format(media_type, themoviedb_id), params=params)
 
     if response and not err_msg:
@@ -2164,7 +2172,7 @@ class CustomFormatter(Formatter):
                     # used later on, then an exception will be raised
                     auto_arg_index = False
 
-                if plexpy.CONFIG.NOTIFY_TEXT_EVAL and field_name.startswith('`') and field_name.endswith('`'):
+                if _get_config().NOTIFY_TEXT_EVAL and field_name.startswith('`') and field_name.endswith('`'):
                     try:
                         obj = str_eval(field_name, kwargs)
                         used_args.add(field_name)

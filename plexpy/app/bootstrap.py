@@ -147,6 +147,10 @@ def initialize(config_file):
         CONFIG_FILE = config_file
         _sync_package_globals('CONFIG', 'CONFIG_FILE')
 
+        # Initialize config dependency injection
+        from plexpy.config import set_config
+        set_config(CONFIG)
+
         assert CONFIG is not None
 
         if _INITIALIZED:

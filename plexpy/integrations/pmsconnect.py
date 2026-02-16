@@ -31,6 +31,11 @@ from plexpy.integrations import plextv
 from plexpy.services import activity_processor
 from plexpy.util import helpers
 from plexpy.util import logger
+from plexpy.integrations.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 def get_server_friendly_name():
@@ -41,13 +46,13 @@ def get_server_friendly_name():
     if not server_name:
         servers_info = PmsConnect().get_servers_info()
         for server in servers_info:
-            if server['machine_identifier'] == plexpy.CONFIG.PMS_IDENTIFIER:
+            if server['machine_identifier'] == _get_config().PMS_IDENTIFIER:
                 server_name = server['name']
                 break
 
-    if server_name and server_name != plexpy.CONFIG.PMS_NAME:
-        plexpy.CONFIG.__setattr__('PMS_NAME', server_name)
-        plexpy.CONFIG.write()
+    if server_name and server_name != _get_config().PMS_NAME:
+        _get_config().__setattr__('PMS_NAME', server_name)
+        _get_config().write()
         logger.info("Tautulli Pmsconnect :: Server name retrieved.")
 
     return server_name
@@ -62,12 +67,12 @@ class PmsConnect(object):
         self.url = url
         self.token = token
 
-        if not self.url and plexpy.CONFIG.PMS_URL:
-            self.url = plexpy.CONFIG.PMS_URL
+        if not self.url and _get_config().PMS_URL:
+            self.url = _get_config().PMS_URL
         elif not self.url:
-            self.url = 'http://{hostname}:{port}'.format(hostname=plexpy.CONFIG.PMS_IP,
-                                                         port=plexpy.CONFIG.PMS_PORT)
-        self.timeout = plexpy.CONFIG.PMS_TIMEOUT
+            self.url = 'http://{hostname}:{port}'.format(hostname=_get_config().PMS_IP,
+                                                         port=_get_config().PMS_PORT)
+        self.timeout = _get_config().PMS_TIMEOUT
 
         if not self.token:
             # Check if we should use the admin token, or the guest server token
@@ -76,9 +81,9 @@ class PmsConnect(object):
                 user_tokens = user_data.get_tokens(user_id=session.get_session_user_id())
                 self.token = user_tokens['server_token']
             else:
-                self.token = plexpy.CONFIG.PMS_TOKEN
+                self.token = _get_config().PMS_TOKEN
 
-        self.ssl_verify = plexpy.CONFIG.VERIFY_SSL_CERT
+        self.ssl_verify = _get_config().VERIFY_SSL_CERT
 
         self.request_handler = http_handler.HTTPHandler(urls=self.url,
                                                         token=self.token,
@@ -683,7 +688,7 @@ class PmsConnect(object):
         metadata = {}
 
         if not skip_cache and cache_key:
-            in_file_folder = os.path.join(plexpy.CONFIG.CACHE_DIR, 'session_metadata')
+            in_file_folder = os.path.join(_get_config().CACHE_DIR, 'session_metadata')
             in_file_path = os.path.join(in_file_folder, 'metadata-sessionKey-%s.json' % cache_key)
 
             if not os.path.exists(in_file_folder):
@@ -698,7 +703,7 @@ class PmsConnect(object):
             if metadata:
                 _cache_time = metadata.pop('_cache_time', 0)
                 # Return cached metadata if less than cache_seconds ago
-                if return_cache or helpers.timestamp() - _cache_time <= plexpy.CONFIG.METADATA_CACHE_SECONDS:
+                if return_cache or helpers.timestamp() - _cache_time <= _get_config().METADATA_CACHE_SECONDS:
                     return metadata
 
         if rating_key:
@@ -707,7 +712,7 @@ class PmsConnect(object):
             metadata_xml = self.get_sync_item(str(sync_id), output_format='xml')
         elif plex_guid.startswith(('plex://movie', 'plex://episode')):
             rating_key = plex_guid.rsplit('/', 1)[-1]
-            plextv_metadata = PmsConnect(url='https://metadata.provider.plex.tv', token=plexpy.CONFIG.PMS_TOKEN)
+            plextv_metadata = PmsConnect(url='https://metadata.provider.plex.tv', token=_get_config().PMS_TOKEN)
             metadata_xml = plextv_metadata.get_metadata(rating_key, output_format='xml')
         elif epg_key:
             metadata_xml = self.get_epg_metadata(epg_key, output_format='xml')
@@ -1698,7 +1703,7 @@ class PmsConnect(object):
             if cache_key:
                 metadata['_cache_time'] = helpers.timestamp()
 
-                out_file_folder = os.path.join(plexpy.CONFIG.CACHE_DIR, 'session_metadata')
+                out_file_folder = os.path.join(_get_config().CACHE_DIR, 'session_metadata')
                 out_file_path = os.path.join(out_file_folder, 'metadata-sessionKey-%s.json' % cache_key)
 
                 if not os.path.exists(out_file_folder):
@@ -3346,9 +3351,9 @@ class PmsConnect(object):
                 logger.info("Tautulli is unable to check for Plex updates. Disabling check for Plex updates.")
 
                 # Disable check for Plex updates
-                plexpy.CONFIG.MONITOR_PMS_UPDATES = 0
+                _get_config().MONITOR_PMS_UPDATES = 0
                 plexpy.initialize_scheduler()
-                plexpy.CONFIG.write()
+                _get_config().write()
 
             return {}
 
@@ -3368,13 +3373,13 @@ class PmsConnect(object):
 
     def set_server_version(self):
         identity = self.get_server_identity()
-        version = identity.get('version', plexpy.CONFIG.PMS_VERSION)
+        version = identity.get('version', _get_config().PMS_VERSION)
 
-        plexpy.CONFIG.__setattr__('PMS_VERSION', version)
-        plexpy.CONFIG.write()
+        _get_config().__setattr__('PMS_VERSION', version)
+        _get_config().write()
 
     def get_server_update_channel(self):
-        if plexpy.CONFIG.PMS_UPDATE_CHANNEL == 'plex':
+        if _get_config().PMS_UPDATE_CHANNEL == 'plex':
             update_channel_value = self.get_server_pref('ButlerUpdateChannel')
 
             if update_channel_value == '8':
@@ -3382,7 +3387,7 @@ class PmsConnect(object):
             else:
                 return 'public'
 
-        return plexpy.CONFIG.PMS_UPDATE_CHANNEL
+        return _get_config().PMS_UPDATE_CHANNEL
 
     @staticmethod
     def get_dynamic_range(stream):
@@ -3400,7 +3405,7 @@ class PmsConnect(object):
         video_dynamic_range = []
 
         # HDR details got introduced with PMS version 1.25.6.5545
-        if helpers.version_to_tuple(plexpy.CONFIG.PMS_VERSION) >= helpers.version_to_tuple('1.25.6.5545'):
+        if helpers.version_to_tuple(_get_config().PMS_VERSION) >= helpers.version_to_tuple('1.25.6.5545'):
             if 'Dolby Vision' in extended_display_title or 'DoVi' in extended_display_title:
                 video_dynamic_range.append('Dolby Vision')
             if 'HLG' in extended_display_title:

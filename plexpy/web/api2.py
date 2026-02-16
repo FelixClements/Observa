@@ -46,6 +46,11 @@ from plexpy.services import newsletter_handler
 from plexpy.services import notification_handler
 from plexpy.util import helpers
 from plexpy.util import logger
+from plexpy.web.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 class API2(object):
@@ -89,15 +94,16 @@ class API2(object):
     def _api_validate(self, *args, **kwargs):
         """ Sets class vars and remove unneeded parameters. """
 
-        if not plexpy.CONFIG.API_ENABLED:
+        config = _get_config()
+        if not config.API_ENABLED:
             self._api_msg = 'API not enabled'
             self._api_response_code = 404
 
-        elif not plexpy.CONFIG.API_KEY:
+        elif not _get_config().API_KEY:
             self._api_msg = 'API key not generated'
             self._api_response_code = 401
 
-        elif len(plexpy.CONFIG.API_KEY) != 32:
+        elif len(_get_config().API_KEY) != 32:
             self._api_msg = 'API key not generated correctly'
             self._api_response_code = 401
 
@@ -124,8 +130,8 @@ class API2(object):
         if 'app' in kwargs and helpers.bool_true(kwargs.pop('app')):
             self._api_app = True
 
-        if plexpy.CONFIG.API_ENABLED and not self._api_msg or self._api_cmd in ('get_apikey', 'docs', 'docs_md'):
-            if not self._api_app and self._api_apikey == plexpy.CONFIG.API_KEY:
+        if _get_config().API_ENABLED and not self._api_msg or self._api_cmd in ('get_apikey', 'docs', 'docs_md'):
+            if not self._api_app and self._api_apikey == _get_config().API_KEY:
                 self._api_authenticated = True
 
             elif self._api_app and mobile_app.get_temp_device_token(self._api_apikey) and \
@@ -185,7 +191,7 @@ class API2(object):
                      ]
             ```
         """
-        logfile = os.path.join(plexpy.CONFIG.LOG_DIR, logger.FILENAME)
+        logfile = os.path.join(_get_config().LOG_DIR, logger.FILENAME)
         templog = []
         start = int(start)
         end = int(end)
@@ -275,7 +281,7 @@ class API2(object):
         interface_list = [name for name in os.listdir(interface_dir) if
                           os.path.isdir(os.path.join(interface_dir, name))]
 
-        conf = plexpy.CONFIG._config
+        conf = _get_config()._config
         settings = {}
 
         # Truthify the dict
@@ -315,7 +321,7 @@ class API2(object):
                 None
             ```
         """
-        if not plexpy.CONFIG.API_SQL:
+        if not _get_config().API_SQL:
             self._api_msg = 'SQL not enabled for the API.'
             return
 
@@ -325,7 +331,7 @@ class API2(object):
 
         # allow the user to shoot them self
         # in the foot but not in the head..
-        backup_dir = plexpy.CONFIG.BACKUP_DIR
+        backup_dir = _get_config().BACKUP_DIR
         if not os.path.isdir(backup_dir) or not os.listdir(backup_dir):
             self.backup_db()
         else:
@@ -462,7 +468,7 @@ class API2(object):
             plex_server = plextv.get_server_resources(return_info=True)
             tautulli = plexpy.get_tautulli_info()
 
-            data = {"server_id": plexpy.CONFIG.PMS_UUID}
+            data = {"server_id": _get_config().PMS_UUID}
             data.update(plex_server)
             data.update(tautulli)
 
@@ -636,26 +642,26 @@ General optional parameters:
          """
         data = None
         apikey = hashlib.sha224(str(random.getrandbits(256)).encode('utf-8')).hexdigest()[0:32]
-        if plexpy.CONFIG.HTTP_USERNAME and plexpy.CONFIG.HTTP_PASSWORD:
-            authenticated = username == plexpy.CONFIG.HTTP_USERNAME and check_hash(password, plexpy.CONFIG.HTTP_PASSWORD)
+        if _get_config().HTTP_USERNAME and _get_config().HTTP_PASSWORD:
+            authenticated = username == _get_config().HTTP_USERNAME and check_hash(password, _get_config().HTTP_PASSWORD)
 
             if authenticated:
-                if plexpy.CONFIG.API_KEY:
-                    data = plexpy.CONFIG.API_KEY
+                if _get_config().API_KEY:
+                    data = _get_config().API_KEY
                 else:
                     data = apikey
-                    plexpy.CONFIG.API_KEY = apikey
-                    plexpy.CONFIG.write()
+                    _get_config().API_KEY = apikey
+                    _get_config().write()
             else:
                 self._api_msg = 'Authentication is enabled, please add the correct username and password to the parameters'
         else:
-            if plexpy.CONFIG.API_KEY:
-                data = plexpy.CONFIG.API_KEY
+            if _get_config().API_KEY:
+                data = _get_config().API_KEY
             else:
                 # Make a apikey if the doesn't exist
                 data = apikey
-                plexpy.CONFIG.API_KEY = apikey
-                plexpy.CONFIG.write()
+                _get_config().API_KEY = apikey
+                _get_config().write()
 
         return data
 

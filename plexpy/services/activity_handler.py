@@ -1,4 +1,4 @@
-﻿# This file is part of Tautulli.
+# This file is part of Tautulli.
 #
 #  Tautulli is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -22,12 +22,20 @@ import pytz
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.db import datafactory
 from plexpy.integrations import pmsconnect
 from plexpy.services import activity_processor
 from plexpy.services import notification_handler
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 ACTIVITY_SCHED = None
@@ -219,8 +227,8 @@ class ActivityHandler(object):
                             (self.session_key, buffer_last_triggered))
             time_since_last_trigger = helpers.timestamp() - int(buffer_last_triggered)
 
-        if current_buffer_count >= plexpy.CONFIG.BUFFER_THRESHOLD and time_since_last_trigger == 0 or \
-                time_since_last_trigger >= plexpy.CONFIG.BUFFER_WAIT:
+        if current_buffer_count >= _get_config().BUFFER_THRESHOLD and time_since_last_trigger == 0 or \
+                time_since_last_trigger >= _get_config().BUFFER_WAIT:
             self.ap.set_session_buffer_trigger_time(session_key=self.session_key)
 
             self.put_notification('on_buffer')
@@ -402,9 +410,9 @@ class ActivityHandler(object):
                 self.on_credits(marker)
 
                 if not self.db_session['watched']:
-                    if marker['final'] and plexpy.CONFIG.WATCHED_MARKER == 1:
+                    if marker['final'] and _get_config().WATCHED_MARKER == 1:
                         self._marker_watched(marker)
-                    elif marker['first'] and (plexpy.CONFIG.WATCHED_MARKER in (2, 3)):
+                    elif marker['first'] and (_get_config().WATCHED_MARKER in (2, 3)):
                         self._marker_watched(marker)
 
     def _marker_watched(self, marker):
@@ -412,7 +420,7 @@ class ActivityHandler(object):
             self._watched_callback(marker)
 
     def check_watched(self):
-        if plexpy.CONFIG.WATCHED_MARKER == 1 or plexpy.CONFIG.WATCHED_MARKER == 2:
+        if _get_config().WATCHED_MARKER == 1 or _get_config().WATCHED_MARKER == 2:
             return
 
         # Monitor if the stream has reached the watch percentage for notifications
@@ -481,7 +489,7 @@ class TimelineHandler(object):
                 schedule_callback('rating_key-{}'.format(self.grandparent_rating_key),
                                     func=clear_recently_added_queue,
                                     args=[self.grandparent_rating_key, self.title],
-                                    seconds=plexpy.CONFIG.NOTIFY_RECENTLY_ADDED_DELAY)
+                                    seconds=_get_config().NOTIFY_RECENTLY_ADDED_DELAY)
 
             elif self.media_type in ('season', 'album'):
                 parent_set = RECENTLY_ADDED_QUEUE.get(self.parent_rating_key, set())
@@ -496,7 +504,7 @@ class TimelineHandler(object):
                 schedule_callback('rating_key-{}'.format(self.parent_rating_key),
                                     func=clear_recently_added_queue,
                                     args=[self.parent_rating_key, self.title],
-                                    seconds=plexpy.CONFIG.NOTIFY_RECENTLY_ADDED_DELAY)
+                                    seconds=_get_config().NOTIFY_RECENTLY_ADDED_DELAY)
 
             elif self.media_type in ('movie', 'show', 'artist'):
                 queue_set = RECENTLY_ADDED_QUEUE.get(self.rating_key, set())
@@ -510,7 +518,7 @@ class TimelineHandler(object):
                 schedule_callback('rating_key-{}'.format(self.rating_key),
                                     func=clear_recently_added_queue,
                                     args=[self.rating_key, self.title],
-                                    seconds=plexpy.CONFIG.NOTIFY_RECENTLY_ADDED_DELAY)
+                                    seconds=_get_config().NOTIFY_RECENTLY_ADDED_DELAY)
 
         # A movie, show, or artist is done processing
         elif self.media_type in ('movie', 'show', 'artist') and self.section_id > 0 and \
@@ -578,9 +586,9 @@ class ReachabilityHandler(object):
 
             if not ACTIVITY_SCHED.get_job('on_extdown'):
                 logger.debug("Tautulli ReachabilityHandler :: Scheduling remote access down callback in %d seconds.",
-                                plexpy.CONFIG.NOTIFY_REMOTE_ACCESS_THRESHOLD)
+                                _get_config().NOTIFY_REMOTE_ACCESS_THRESHOLD)
                 schedule_callback('on_extdown', func=self.on_extdown, args=[server_response],
-                                    seconds=plexpy.CONFIG.NOTIFY_REMOTE_ACCESS_THRESHOLD)
+                                    seconds=_get_config().NOTIFY_REMOTE_ACCESS_THRESHOLD)
 
         elif plexpy.PLEX_REMOTE_ACCESS_UP is False and not server_response['reason']:
             logger.info("Tautulli ReachabilityHandler :: Plex remote access is back up.")
@@ -640,7 +648,7 @@ def force_stop_stream(session_key, title, user):
     else:
         session['write_attempts'] += 1
 
-        if session['write_attempts'] < plexpy.CONFIG.SESSION_DB_WRITE_ATTEMPTS:
+        if session['write_attempts'] < _get_config().SESSION_DB_WRITE_ATTEMPTS:
             logger.warn("Tautulli ActivityHandler :: Failed to write stream with sessionKey %s ratingKey %s to the database. " \
                         "Will try again in 30 seconds. Write attempt %s."
                         % (session['session_key'], session['rating_key'], str(session['write_attempts'])))
@@ -666,14 +674,14 @@ def clear_recently_added_queue(rating_key, title):
 
     child_keys = RECENTLY_ADDED_QUEUE[rating_key]
 
-    if plexpy.CONFIG.NOTIFY_GROUP_RECENTLY_ADDED_GRANDPARENT and len(child_keys) > 1:
+    if _get_config().NOTIFY_GROUP_RECENTLY_ADDED_GRANDPARENT and len(child_keys) > 1:
         on_created(rating_key, child_keys=child_keys)
 
     elif child_keys:
         for child_key in child_keys:
             grandchild_keys = RECENTLY_ADDED_QUEUE.get(child_key, [])
 
-            if plexpy.CONFIG.NOTIFY_GROUP_RECENTLY_ADDED_PARENT and len(grandchild_keys) > 1:
+            if _get_config().NOTIFY_GROUP_RECENTLY_ADDED_PARENT and len(grandchild_keys) > 1:
                 on_created(child_key, child_keys=grandchild_keys)
 
             elif grandchild_keys:
@@ -733,7 +741,7 @@ def on_created(rating_key, **kwargs):
 
 def delete_metadata_cache(session_key):
     try:
-        os.remove(os.path.join(plexpy.CONFIG.CACHE_DIR, 'session_metadata', 'metadata-sessionKey-%s.json' % session_key))
+        os.remove(os.path.join(_get_config().CACHE_DIR, 'session_metadata', 'metadata-sessionKey-%s.json' % session_key))
     except OSError as e:
         logger.error("Tautulli ActivityHandler :: Failed to remove metadata cache file (sessionKey %s): %s"
                      % (session_key, e))

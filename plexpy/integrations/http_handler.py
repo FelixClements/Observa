@@ -19,13 +19,21 @@ from multiprocessing.dummy import Pool as ThreadPool
 from urllib.parse import urljoin
 
 import certifi
-import requests
-import urllib3
+from plexpy.util import http as requests_module
+from plexpy.util import http
+
+requests = requests_module
+urllib3 = http.urllib3
 
 import plexpy
 from plexpy.app import common
 from plexpy.util import helpers
 from plexpy.util import logger
+from plexpy.integrations.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 class HTTPHandler(object):
@@ -48,14 +56,14 @@ class HTTPHandler(object):
             self.headers = {
                 'X-Plex-Product': common.PRODUCT,
                 'X-Plex-Version': common.RELEASE,
-                'X-Plex-Client-Identifier': plexpy.CONFIG.PMS_CLIENT_ID or plexpy.CONFIG.PMS_UUID,
+                'X-Plex-Client-Identifier': _get_config().PMS_CLIENT_ID or _get_config().PMS_UUID,
                 'X-Plex-Platform': common.PLATFORM,
                 'X-Plex-Platform-Version': common.PLATFORM_RELEASE,
                 'X-Plex-Device': '{} {}'.format(common.PLATFORM,
                                                 common.PLATFORM_RELEASE),
                 'X-Plex-Device-Name': '{} ({})'.format(common.PLATFORM_DEVICE_NAME,
                                                        common.PRODUCT),
-                'X-Plex-Language': plexpy.CONFIG.PMS_LANGUAGE or plexpy.SYS_LANGUAGE
+                'X-Plex-Language': _get_config().PMS_LANGUAGE or plexpy.SYS_LANGUAGE
             }
 
         self.token = token

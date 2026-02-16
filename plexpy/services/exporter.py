@@ -18,7 +18,7 @@
 import csv
 import json
 import os
-import requests
+from plexpy.util import http as requests
 import shutil
 import threading
 
@@ -27,6 +27,7 @@ from io import open
 from multiprocessing.dummy import Pool as ThreadPool
 
 import plexpy
+from plexpy.config import get_config
 from sqlalchemy import delete, select, update
 
 from plexpy.db import datatables
@@ -36,6 +37,13 @@ from plexpy.integrations.plex import Plex
 from plexpy.services import users
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 class Export(object):
@@ -1827,7 +1835,7 @@ class Export(object):
             user_tokens = user_data.get_tokens(user_id=self.user_id)
             plex_token = user_tokens['server_token']
         else:
-            plex_token = plexpy.CONFIG.PMS_TOKEN
+            plex_token = _get_config().PMS_TOKEN
 
         plex = Plex(token=plex_token)
 
@@ -2014,7 +2022,7 @@ class Export(object):
         self.total_items = len(items)
         logger.info("Tautulli Exporter :: Exporting %d item(s).", self.total_items)
 
-        pool = ThreadPool(processes=plexpy.CONFIG.EXPORT_THREADS)
+        pool = ThreadPool(processes=_get_config().EXPORT_THREADS)
         items = [ExportObject(self, item) for item in items]
 
         try:
@@ -2472,7 +2480,7 @@ def delete_export(export_id):
 def delete_all_exports():
     logger.info("Tautulli Exporter :: Deleting all exports from the export directory.")
 
-    export_dir = plexpy.CONFIG.EXPORT_DIR
+    export_dir = _get_config().EXPORT_DIR
     try:
         shutil.rmtree(export_dir, ignore_errors=True)
     except OSError as e:
@@ -2604,7 +2612,7 @@ def format_export_filename(title, file_format):
 def get_export_dirpath(title, timestamp=None, images_directory=None):
     if timestamp:
         title = format_export_directory(title, timestamp)
-    dirpath = os.path.join(plexpy.CONFIG.EXPORT_DIR, title)
+    dirpath = os.path.join(_get_config().EXPORT_DIR, title)
     if images_directory:
         dirpath = os.path.join(dirpath, '{}.images'.format(images_directory))
     return dirpath

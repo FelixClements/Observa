@@ -69,10 +69,14 @@ from plexpy.util import logger
 from plexpy.util.hashing_passwords import make_hash
 from plexpy.web import web_socket
 from plexpy.web import webstart
+from plexpy.web.dependencies import get_config
 from plexpy.web.api2 import API2
 from plexpy.util.helpers import checked, addtoapi, get_ip, create_https_certificates, build_datatables_json, sanitize_out
-from plexpy.web.session import get_session_info, get_session_user_id, allow_session_user, allow_session_library
-from plexpy.web.webauth import AuthController, requireAuth, member_of, check_auth, get_jwt_token
+
+
+def _get_config():
+    return get_config()
+
 
 TEMPLATE_LOOKUP = None
 
@@ -81,7 +85,7 @@ def serve_template(template_name, **kwargs):
     global TEMPLATE_LOOKUP
     if TEMPLATE_LOOKUP is None:
         interface_dir = os.path.join(plexpy.ASSETS_DIR, 'interfaces')
-        template_dir = os.path.join(interface_dir, plexpy.CONFIG.INTERFACE)
+        template_dir = os.path.join(interface_dir, _get_config().INTERFACE)
         TEMPLATE_LOOKUP = TemplateLookup(directories=[template_dir], default_filters=['unicode', 'h'],
                             error_handler=mako_error_handler)
 
@@ -154,7 +158,7 @@ class WebInterface(object):
     @cherrypy.expose
     @requireAuth()
     def index(self, **kwargs):
-        if plexpy.CONFIG.FIRST_RUN_COMPLETE:
+        if _get_config().FIRST_RUN_COMPLETE:
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "home")
         else:
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "welcome")
@@ -166,17 +170,17 @@ class WebInterface(object):
     @requireAuth(member_of("admin"))
     def welcome(self, **kwargs):
         config = {
-            "pms_identifier": plexpy.CONFIG.PMS_IDENTIFIER,
-            "pms_ip": plexpy.CONFIG.PMS_IP,
-            "pms_port": plexpy.CONFIG.PMS_PORT,
-            "pms_ssl": plexpy.CONFIG.PMS_SSL,
-            "pms_is_cloud": plexpy.CONFIG.PMS_IS_CLOUD,
+            "pms_identifier": _get_config().PMS_IDENTIFIER,
+            "pms_ip": _get_config().PMS_IP,
+            "pms_port": _get_config().PMS_PORT,
+            "pms_ssl": _get_config().PMS_SSL,
+            "pms_is_cloud": _get_config().PMS_IS_CLOUD,
             "pms_name": helpers.pms_name(),
-            "logging_ignore_interval": plexpy.CONFIG.LOGGING_IGNORE_INTERVAL
+            "logging_ignore_interval": _get_config().LOGGING_IGNORE_INTERVAL
         }
 
         # The setup wizard just refreshes the page on submit so we must redirect to home if config set.
-        if plexpy.CONFIG.FIRST_RUN_COMPLETE:
+        if _get_config().FIRST_RUN_COMPLETE:
             plexpy.initialize_scheduler()
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "home")
         else:
@@ -187,10 +191,10 @@ class WebInterface(object):
     @requireAuth(member_of("admin"))
     def save_pms_token(self, token=None, client_id=None, **kwargs):
         if token is not None:
-            plexpy.CONFIG.PMS_TOKEN = token
+            _get_config().PMS_TOKEN = token
         if client_id is not None:
-            plexpy.CONFIG.PMS_CLIENT_ID = client_id
-        plexpy.CONFIG.write()
+            _get_config().PMS_CLIENT_ID = client_id
+        _get_config().write()
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -238,12 +242,12 @@ class WebInterface(object):
     @requireAuth()
     def home(self, **kwargs):
         config = {
-            "home_sections": plexpy.CONFIG.HOME_SECTIONS,
-            "home_refresh_interval": plexpy.CONFIG.HOME_REFRESH_INTERVAL,
+            "home_sections": _get_config().HOME_SECTIONS,
+            "home_refresh_interval": _get_config().HOME_REFRESH_INTERVAL,
             "pms_name": helpers.pms_name(),
-            "pms_is_cloud": plexpy.CONFIG.PMS_IS_CLOUD,
-            "update_show_changelog": plexpy.CONFIG.UPDATE_SHOW_CHANGELOG,
-            "first_run_complete": plexpy.CONFIG.FIRST_RUN_COMPLETE
+            "pms_is_cloud": _get_config().PMS_IS_CLOUD,
+            "update_show_changelog": _get_config().UPDATE_SHOW_CHANGELOG,
+            "first_run_complete": _get_config().FIRST_RUN_COMPLETE
         }
         return serve_template(template_name="index.html", title="Home", config=config)
 
@@ -268,12 +272,12 @@ class WebInterface(object):
                      }
             ```
         """
-        if plexpy.CONFIG.DATE_FORMAT:
-            date_format = plexpy.CONFIG.DATE_FORMAT
+        if _get_config().DATE_FORMAT:
+            date_format = _get_config().DATE_FORMAT
         else:
             date_format = 'YYYY-MM-DD'
-        if plexpy.CONFIG.TIME_FORMAT:
-            time_format = plexpy.CONFIG.TIME_FORMAT
+        if _get_config().TIME_FORMAT:
+            time_format = _get_config().TIME_FORMAT
         else:
             time_format = 'HH:mm'
 
@@ -286,7 +290,7 @@ class WebInterface(object):
     @requireAuth()
     def get_current_activity(self, **kwargs):
 
-        pms_connect = pmsconnect.PmsConnect(token=plexpy.CONFIG.PMS_TOKEN)
+        pms_connect = pmsconnect.PmsConnect(token=_get_config().PMS_TOKEN)
         result = pms_connect.get_current_activity()
 
         if result:
@@ -299,7 +303,7 @@ class WebInterface(object):
     @requireAuth()
     def get_current_activity_instance(self, session_key=None, **kwargs):
 
-        pms_connect = pmsconnect.PmsConnect(token=plexpy.CONFIG.PMS_TOKEN)
+        pms_connect = pmsconnect.PmsConnect(token=_get_config().PMS_TOKEN)
         result = pms_connect.get_current_activity()
 
         if result:
@@ -343,10 +347,10 @@ class WebInterface(object):
         if helpers.bool_true(plextv):
             base_url = 'https://plex.tv'
         else:
-            base_url = plexpy.CONFIG.PMS_URL_OVERRIDE or plexpy.CONFIG.PMS_URL
+            base_url = _get_config().PMS_URL_OVERRIDE or _get_config().PMS_URL
 
         if '{machine_id}' in endpoint:
-            endpoint = endpoint.format(machine_id=plexpy.CONFIG.PMS_IDENTIFIER)
+            endpoint = endpoint.format(machine_id=_get_config().PMS_IDENTIFIER)
 
         url = base_url + endpoint + ('?' + urlencode(kwargs) if kwargs else '')
         return serve_template(template_name="xml_shortcut.html", title="Plex XML", url=url)
@@ -366,7 +370,7 @@ class WebInterface(object):
     def library_stats(self, **kwargs):
         data_factory = datafactory.DataFactory()
 
-        library_cards = plexpy.CONFIG.HOME_LIBRARY_CARDS
+        library_cards = _get_config().HOME_LIBRARY_CARDS
 
         stats_data = data_factory.get_library_stats(library_cards=library_cards)
 
@@ -576,8 +580,8 @@ class WebInterface(object):
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT)
 
         config = {
-            "get_file_sizes": plexpy.CONFIG.GET_FILE_SIZES,
-            "get_file_sizes_hold": plexpy.CONFIG.GET_FILE_SIZES_HOLD
+            "get_file_sizes": _get_config().GET_FILE_SIZES,
+            "get_file_sizes_hold": _get_config().GET_FILE_SIZES_HOLD
         }
 
         if section_id:
@@ -605,7 +609,7 @@ class WebInterface(object):
             status_message = 'An error occurred.'
 
         return serve_template(template_name="edit_library.html", title="Edit Library",
-                              data=result, server_id=plexpy.CONFIG.PMS_IDENTIFIER, status_message=status_message)
+                              data=result, server_id=_get_config().PMS_IDENTIFIER, status_message=status_message)
 
     @cherrypy.expose
     @requireAuth(member_of("admin"))
@@ -897,7 +901,7 @@ class WebInterface(object):
     @cherrypy.tools.json_out()
     @requireAuth(member_of("admin"))
     def get_media_info_file_sizes(self, section_id=None, rating_key=None, **kwargs):
-        get_file_sizes_hold = plexpy.CONFIG.GET_FILE_SIZES_HOLD
+        get_file_sizes_hold = _get_config().GET_FILE_SIZES_HOLD
         section_ids = set(get_file_sizes_hold['section_ids'])
         rating_keys = set(get_file_sizes_hold['rating_keys'])
 
@@ -909,7 +913,7 @@ class WebInterface(object):
                 section_ids.add(section_id)
             elif rating_key:
                 rating_keys.add(rating_key)
-            plexpy.CONFIG.GET_FILE_SIZES_HOLD = {'section_ids': list(section_ids), 'rating_keys': list(rating_keys)}
+            _get_config().GET_FILE_SIZES_HOLD = {'section_ids': list(section_ids), 'rating_keys': list(rating_keys)}
 
             library_data = libraries.Libraries()
             result = library_data.get_media_info_file_sizes(section_id=section_id,
@@ -919,7 +923,7 @@ class WebInterface(object):
                 section_ids.remove(section_id)
             elif rating_key:
                 rating_keys.remove(rating_key)
-            plexpy.CONFIG.GET_FILE_SIZES_HOLD = {'section_ids': list(section_ids), 'rating_keys': list(rating_keys)}
+            _get_config().GET_FILE_SIZES_HOLD = {'section_ids': list(section_ids), 'rating_keys': list(rating_keys)}
         else:
             result = False
 
@@ -1176,7 +1180,7 @@ class WebInterface(object):
                 None
             ```
         """
-        get_file_sizes_hold = plexpy.CONFIG.GET_FILE_SIZES_HOLD
+        get_file_sizes_hold = _get_config().GET_FILE_SIZES_HOLD
         section_ids = set(get_file_sizes_hold['section_ids'])
 
         if section_id not in section_ids:
@@ -2755,7 +2759,7 @@ class WebInterface(object):
         if get_session_user_id():
             user_id = get_session_user_id()
 
-        plex_tv = plextv.PlexTV(token=plexpy.CONFIG.PMS_TOKEN)
+        plex_tv = plextv.PlexTV(token=_get_config().PMS_TOKEN)
         result = plex_tv.get_synced_items(machine_id=machine_id, user_id_filter=user_id)
 
         if result:
@@ -2827,7 +2831,7 @@ class WebInterface(object):
         else:
             filename = logger.FILENAME
 
-        with open(os.path.join(plexpy.CONFIG.LOG_DIR, filename), 'r', encoding='utf-8') as f:
+        with open(os.path.join(_get_config().LOG_DIR, filename), 'r', encoding='utf-8') as f:
             for l in f.readlines():
                 try:
                     temp_loglevel_and_time = l.split(' - ', 1)
@@ -2900,7 +2904,7 @@ class WebInterface(object):
         if kwargs.get('log_type'):
             logfile = 'Plex Media ' + kwargs['log_type'].capitalize()
 
-        window = int(kwargs.get('window', plexpy.CONFIG.PMS_LOGS_LINE_CAP))
+        window = int(kwargs.get('window', _get_config().PMS_LOGS_LINE_CAP))
 
         try:
             return {'data': log_reader.get_log_tail(window=window, parsed=True, log_file=logfile)}
@@ -3121,7 +3125,7 @@ class WebInterface(object):
             filename = logger.FILENAME
 
         try:
-            open(os.path.join(plexpy.CONFIG.LOG_DIR, filename), 'w').close()
+            open(os.path.join(_get_config().LOG_DIR, filename), 'w').close()
             result = 'success'
             msg = 'Cleared the %s file.' % filename
             logger.info(msg)
@@ -3137,10 +3141,10 @@ class WebInterface(object):
     def toggleVerbose(self, **kwargs):
         plexpy.VERBOSE = not plexpy.VERBOSE
 
-        plexpy.CONFIG.VERBOSE_LOGS = plexpy.VERBOSE
-        plexpy.CONFIG.write()
+        _get_config().VERBOSE_LOGS = plexpy.VERBOSE
+        _get_config().write()
 
-        logger.initLogger(console=not plexpy.QUIET, log_dir=plexpy.CONFIG.LOG_DIR, verbose=plexpy.VERBOSE)
+        logger.initLogger(console=not plexpy.QUIET, log_dir=_get_config().LOG_DIR, verbose=plexpy.VERBOSE)
         logger.info("Verbose toggled, set to %s", plexpy.VERBOSE)
         logger.debug("If you read this message, debug logging is available")
         raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "logs")
@@ -3166,7 +3170,7 @@ class WebInterface(object):
             filename = logger.FILENAME
 
         try:
-            with open(os.path.join(plexpy.CONFIG.LOG_DIR, filename), 'r', encoding='utf-8') as f:
+            with open(os.path.join(_get_config().LOG_DIR, filename), 'r', encoding='utf-8') as f:
                 return '<pre>%s</pre>' % f.read()
         except IOError as e:
             return "Log file not found."
@@ -3180,14 +3184,14 @@ class WebInterface(object):
         settings_dict = {}
 
         for setting in config.SETTINGS:
-            settings_dict[setting.lower()] = getattr(plexpy.CONFIG, setting)
+            settings_dict[setting.lower()] = getattr(_get_config(), setting)
 
         for setting in config.CHECKED_SETTINGS:
-            settings_dict[setting.lower()] = checked(getattr(plexpy.CONFIG, setting))
+            settings_dict[setting.lower()] = checked(getattr(_get_config(), setting))
 
         # Initialise blank passwords so we do not expose them in the html forms
         # but users are still able to clear them
-        if plexpy.CONFIG.HTTP_PASSWORD != '':
+        if _get_config().HTTP_PASSWORD != '':
             settings_dict['http_password'] = '    '
         else:
             settings_dict['http_password'] = ''
@@ -3240,27 +3244,27 @@ class WebInterface(object):
             del kwargs[use_config]
 
         # If we change any monitoring settings, make sure we reschedule tasks.
-        if kwargs.get('check_github') != plexpy.CONFIG.CHECK_GITHUB or \
-                kwargs.get('check_github_interval') != str(plexpy.CONFIG.CHECK_GITHUB_INTERVAL) or \
-                kwargs.get('refresh_libraries_interval') != str(plexpy.CONFIG.REFRESH_LIBRARIES_INTERVAL) or \
-                kwargs.get('refresh_users_interval') != str(plexpy.CONFIG.REFRESH_USERS_INTERVAL) or \
-                kwargs.get('pms_update_check_interval') != str(plexpy.CONFIG.PMS_UPDATE_CHECK_INTERVAL) or \
-                kwargs.get('monitor_pms_updates') != plexpy.CONFIG.MONITOR_PMS_UPDATES or \
-                kwargs.get('pms_url_manual') != plexpy.CONFIG.PMS_URL_MANUAL or \
-                kwargs.get('backup_interval') != str(plexpy.CONFIG.BACKUP_INTERVAL):
+        if kwargs.get('check_github') != _get_config().CHECK_GITHUB or \
+                kwargs.get('check_github_interval') != str(_get_config().CHECK_GITHUB_INTERVAL) or \
+                kwargs.get('refresh_libraries_interval') != str(_get_config().REFRESH_LIBRARIES_INTERVAL) or \
+                kwargs.get('refresh_users_interval') != str(_get_config().REFRESH_USERS_INTERVAL) or \
+                kwargs.get('pms_update_check_interval') != str(_get_config().PMS_UPDATE_CHECK_INTERVAL) or \
+                kwargs.get('monitor_pms_updates') != _get_config().MONITOR_PMS_UPDATES or \
+                kwargs.get('pms_url_manual') != _get_config().PMS_URL_MANUAL or \
+                kwargs.get('backup_interval') != str(_get_config().BACKUP_INTERVAL):
             reschedule = True
 
         # If we change the SSL setting for PMS or PMS remote setting, make sure we grab the new url.
-        if kwargs.get('pms_ssl') != str(plexpy.CONFIG.PMS_SSL) or \
-                kwargs.get('pms_url_manual') != plexpy.CONFIG.PMS_URL_MANUAL:
+        if kwargs.get('pms_ssl') != str(_get_config().PMS_SSL) or \
+                kwargs.get('pms_url_manual') != _get_config().PMS_URL_MANUAL:
             server_changed = True
 
         # If we change the HTTPS setting, make sure we generate a new certificate.
         if kwargs.get('enable_https') and kwargs.get('https_create_cert'):
-            if kwargs.get('https_domain') != plexpy.CONFIG.HTTPS_DOMAIN or \
-                    kwargs.get('https_ip') != plexpy.CONFIG.HTTPS_IP or \
-                    kwargs.get('https_cert') != plexpy.CONFIG.HTTPS_CERT or \
-                    kwargs.get('https_key') != plexpy.CONFIG.HTTPS_KEY:
+            if kwargs.get('https_domain') != _get_config().HTTPS_DOMAIN or \
+                    kwargs.get('https_ip') != _get_config().HTTPS_IP or \
+                    kwargs.get('https_cert') != _get_config().HTTPS_CERT or \
+                    kwargs.get('https_key') != _get_config().HTTPS_KEY:
                 https_changed = True
 
         # Remove config with 'hsec-' prefix and change home_sections to list
@@ -3300,10 +3304,10 @@ class WebInterface(object):
         if first_run:
             kwargs['first_run_complete'] = 1
 
-        plexpy.CONFIG.process_kwargs(kwargs)
+        _get_config().process_kwargs(kwargs)
 
         # Write the config
-        plexpy.CONFIG.write()
+        _get_config().write()
 
         # Get new server URLs for SSL communications and get new server friendly name
         if server_changed:
@@ -3322,7 +3326,7 @@ class WebInterface(object):
 
         # Generate a new HTTPS certificate
         if https_changed:
-            create_https_certificates(plexpy.CONFIG.HTTPS_CERT, plexpy.CONFIG.HTTPS_KEY)
+            create_https_certificates(_get_config().HTTPS_CERT, _get_config().HTTPS_KEY)
 
         # Refresh users table if our server IP changes.
         if refresh_libraries:
@@ -3395,10 +3399,10 @@ class WebInterface(object):
 
         return {'plexpass': plexpass,
                 'pms_platform': common.PMS_PLATFORM_NAME_OVERRIDES.get(
-                    plexpy.CONFIG.PMS_PLATFORM, plexpy.CONFIG.PMS_PLATFORM),
-                'pms_update_channel': plexpy.CONFIG.PMS_UPDATE_CHANNEL,
-                'pms_update_distro': plexpy.CONFIG.PMS_UPDATE_DISTRO,
-                'pms_update_distro_build': plexpy.CONFIG.PMS_UPDATE_DISTRO_BUILD}
+                    _get_config().PMS_PLATFORM, _get_config().PMS_PLATFORM),
+                'pms_update_channel': _get_config().PMS_UPDATE_CHANNEL,
+                'pms_update_distro': _get_config().PMS_UPDATE_DISTRO,
+                'pms_update_distro_build': _get_config().PMS_UPDATE_DISTRO_BUILD}
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -3736,11 +3740,11 @@ class WebInterface(object):
     @cherrypy.tools.json_out()
     @requireAuth(member_of("admin"))
     def facebook_retrieve_token(self, **kwargs):
-        if plexpy.CONFIG.FACEBOOK_TOKEN == 'temp':
+        if _get_config().FACEBOOK_TOKEN == 'temp':
             return {'result': 'waiting'}
-        elif plexpy.CONFIG.FACEBOOK_TOKEN:
-            token = plexpy.CONFIG.FACEBOOK_TOKEN
-            plexpy.CONFIG.FACEBOOK_TOKEN = ''
+        elif _get_config().FACEBOOK_TOKEN:
+            token = _get_config().FACEBOOK_TOKEN
+            _get_config().FACEBOOK_TOKEN = ''
             return {'result': 'success', 'msg': 'Authorization successful.', 'access_token': token}
         else:
             return {'result': 'error', 'msg': 'Failed to request authorization.'}
@@ -3764,10 +3768,10 @@ class WebInterface(object):
             kwargs[plain_config] = kwargs[use_config]
             del kwargs[use_config]
 
-        plexpy.CONFIG.process_kwargs(kwargs)
+        _get_config().process_kwargs(kwargs)
 
         # Write the config
-        plexpy.CONFIG.write()
+        _get_config().write()
 
         cherrypy.response.status = 200
 
@@ -3859,12 +3863,12 @@ class WebInterface(object):
     def migrate_sqlite(self, sqlite_file=None, sqlite_path=None, confirm_overwrite=False, **kwargs):
         if sqlite_path:
             sqlite_file_name = os.path.basename(sqlite_path)
-            sqlite_cache_path = os.path.join(plexpy.CONFIG.CACHE_DIR, sqlite_file_name + '.migrate.db')
+            sqlite_cache_path = os.path.join(_get_config().CACHE_DIR, sqlite_file_name + '.migrate.db')
             logger.info("Received SQLite file '%s' for migration. Saving to cache: %s",
                         sqlite_file_name, sqlite_cache_path)
             sqlite_path = shutil.copyfile(sqlite_path, sqlite_cache_path)
         elif sqlite_file:
-            sqlite_path = os.path.join(plexpy.CONFIG.CACHE_DIR, sqlite_file.filename + '.migrate.db')
+            sqlite_path = os.path.join(_get_config().CACHE_DIR, sqlite_file.filename + '.migrate.db')
             logger.info("Received SQLite file '%s' for migration. Saving to cache: %s",
                         sqlite_file.filename, sqlite_path)
             with open(sqlite_path, 'wb') as f:
@@ -3881,7 +3885,7 @@ class WebInterface(object):
             from plexpy.db.migrations import manager as migration_manager
             from plexpy.db.migrations import settings as migration_settings
 
-            url = migration_settings.resolve_database_url(config=plexpy.CONFIG)
+            url = migration_settings.resolve_database_url(config=_get_config())
             if not migration_manager.is_database_empty(url) and not helpers.bool_true(confirm_overwrite):
                 return {
                     'result': 'confirm',
@@ -3977,7 +3981,7 @@ class WebInterface(object):
             ```
         """
         if config_file:
-            config_path = os.path.join(plexpy.CONFIG.CACHE_DIR, config_file.filename + '.import.ini')
+            config_path = os.path.join(_get_config().CACHE_DIR, config_file.filename + '.import.ini')
             logger.info("Received config file '%s' for import. Saving to cache '%s'.",
                         config_file.filename, config_path)
             with open(config_path, 'wb') as f:
@@ -4092,11 +4096,11 @@ class WebInterface(object):
                 if helpers.bool_true(test_websocket):
                     # Quick test websocket connection
                     ws_url = result['url'].replace('http', 'ws', 1) + '/:/websockets/notifications'
-                    header = ['X-Plex-Token: %s' % plexpy.CONFIG.PMS_TOKEN]
+                    header = ['X-Plex-Token: %s' % _get_config().PMS_TOKEN]
                     # Enforce SSL as needed
                     if ssl:
                         secure = 'secure '
-                        if plexpy.CONFIG.VERIFY_SSL_CERT:
+                        if _get_config().VERIFY_SSL_CERT:
                             sslopt = {'ca_certs': certifi.where()}
                         else:
                             sslopt = {'cert_reqs': _ssl.CERT_NONE}
@@ -4182,7 +4186,7 @@ class WebInterface(object):
     @requireAuth(member_of("admin"))
     def generate_api_key(self, device=None, **kwargs):
         apikey = ''
-        while not apikey or apikey == plexpy.CONFIG.API_KEY or mobile_app.get_mobile_device_by_token(device_token=apikey):
+        while not apikey or apikey == _get_config().API_KEY or mobile_app.get_mobile_device_by_token(device_token=apikey):
             if sys.version_info >= (3, 6):
                 apikey = secrets.token_urlsafe(24)
             else:
@@ -4235,8 +4239,8 @@ class WebInterface(object):
                       'latest_release': plexpy.LATEST_RELEASE,
                       'release_url': helpers.anon_url(
                           'https://github.com/%s/%s/releases/tag/%s'
-                          % (plexpy.CONFIG.GIT_USER,
-                             plexpy.CONFIG.GIT_REPO,
+                          % (_get_config().GIT_USER,
+                             _get_config().GIT_REPO,
                              plexpy.LATEST_RELEASE))
                       }
 
@@ -4250,8 +4254,8 @@ class WebInterface(object):
                       'commits_behind': plexpy.COMMITS_BEHIND,
                       'compare_url': helpers.anon_url(
                           'https://github.com/%s/%s/compare/%s...%s'
-                          % (plexpy.CONFIG.GIT_USER,
-                             plexpy.CONFIG.GIT_REPO,
+                          % (_get_config().GIT_USER,
+                             _get_config().GIT_REPO,
                              plexpy.CURRENT_VERSION,
                              plexpy.LATEST_VERSION))
                       }
@@ -4272,8 +4276,8 @@ class WebInterface(object):
         if signal:
             plexpy.SIGNAL = signal
 
-        if plexpy.CONFIG.HTTP_ROOT.strip('/'):
-            new_http_root = '/' + plexpy.CONFIG.HTTP_ROOT.strip('/') + '/'
+        if _get_config().HTTP_ROOT.strip('/'):
+            new_http_root = '/' + _get_config().HTTP_ROOT.strip('/') + '/'
         else:
             new_http_root = '/'
 
@@ -4297,21 +4301,21 @@ class WebInterface(object):
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "home")
 
         # Show changelog after updating
-        plexpy.CONFIG.UPDATE_SHOW_CHANGELOG = 1
-        plexpy.CONFIG.write()
+        _get_config().UPDATE_SHOW_CHANGELOG = 1
+        _get_config().write()
         return self.do_state_change('update', 'Updating', 120)
 
     @cherrypy.expose
     @requireAuth(member_of("admin"))
     def checkout_git_branch(self, git_remote=None, git_branch=None, **kwargs):
-        if git_branch == plexpy.CONFIG.GIT_BRANCH:
+        if git_branch == _get_config().GIT_BRANCH:
             logger.error("Already on the %s branch" % git_branch)
             raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT + "home")
 
         # Set the new git remote and branch
-        plexpy.CONFIG.GIT_REMOTE = git_remote
-        plexpy.CONFIG.GIT_BRANCH = git_branch
-        plexpy.CONFIG.write()
+        _get_config().GIT_REMOTE = git_remote
+        _get_config().GIT_BRANCH = git_branch
+        _get_config().write()
         return self.do_state_change('checkout', 'Switching Git Branches', 120)
 
     @cherrypy.expose
@@ -4338,8 +4342,8 @@ class WebInterface(object):
 
         # Set update changelog shown status
         if helpers.bool_true(update_shown):
-            plexpy.CONFIG.UPDATE_SHOW_CHANGELOG = 0
-            plexpy.CONFIG.write()
+            _get_config().UPDATE_SHOW_CHANGELOG = 0
+            _get_config().write()
 
         return versioncheck.read_changelog(latest_only=latest_only, since_prev_release=since_prev_release)
 
@@ -4354,8 +4358,8 @@ class WebInterface(object):
         metadata = None
 
         config = {
-            "pms_identifier": plexpy.CONFIG.PMS_IDENTIFIER,
-            "pms_web_url": plexpy.CONFIG.PMS_WEB_URL
+            "pms_identifier": _get_config().PMS_IDENTIFIER,
+            "pms_web_url": _get_config().PMS_WEB_URL
         }
 
         if user_id:
@@ -4774,7 +4778,7 @@ class WebInterface(object):
             img_format = 'png'
 
         fp = '{}.{}'.format(img_hash, img_format)  # we want to be able to preview the thumbs
-        c_dir = os.path.abspath(os.path.join(plexpy.CONFIG.CACHE_DIR, 'images'))
+        c_dir = os.path.abspath(os.path.join(_get_config().CACHE_DIR, 'images'))
         ffp = os.path.join(c_dir, fp)
 
         if not os.path.exists(c_dir):
@@ -4783,7 +4787,7 @@ class WebInterface(object):
         clip = helpers.bool_true(clip)
 
         try:
-            if not plexpy.CONFIG.CACHE_IMAGES or refresh or 'indexes' in img:
+            if not _get_config().CACHE_IMAGES or refresh or 'indexes' in img:
                 raise NotFound
 
             return serve_file(path=ffp, content_type='image/png')
@@ -4805,7 +4809,7 @@ class WebInterface(object):
 
                 if result and result[0]:
                     cherrypy.response.headers['Content-type'] = result[1]
-                    if plexpy.CONFIG.CACHE_IMAGES and 'indexes' not in img:
+                    if _get_config().CACHE_IMAGES and 'indexes' not in img:
                         with open(ffp, 'wb') as f:
                             f.write(result[0])
 
@@ -4863,10 +4867,10 @@ class WebInterface(object):
     def download_config(self, **kwargs):
         """ Download the Tautulli configuration file. """
         config_file = config.FILENAME
-        config_copy = os.path.join(plexpy.CONFIG.CACHE_DIR, config_file)
+        config_copy = os.path.join(_get_config().CACHE_DIR, config_file)
 
         try:
-            plexpy.CONFIG.write()
+            _get_config().write()
             shutil.copyfile(plexpy.CONFIG_FILE, config_copy)
         except:
             pass
@@ -4888,7 +4892,7 @@ class WebInterface(object):
     def download_database(self, **kwargs):
         """ Download the Tautulli database dump. """
         try:
-            database_copy = maintenance.create_database_dump(plexpy.CONFIG.CACHE_DIR)
+            database_copy = maintenance.create_database_dump(_get_config().CACHE_DIR)
         except Exception as exc:
             logger.error('Failed to create database dump: %s', exc)
             cherrypy.response.status = 500
@@ -4930,7 +4934,7 @@ class WebInterface(object):
         except:
             pass
 
-        return serve_download(os.path.join(plexpy.CONFIG.LOG_DIR, filename), name=filename)
+        return serve_download(os.path.join(_get_config().LOG_DIR, filename), name=filename)
 
     @cherrypy.expose
     @requireAuth(member_of("admin"))
@@ -4950,14 +4954,14 @@ class WebInterface(object):
                 download
             ```
         """
-        if not plexpy.CONFIG.PMS_LOGS_FOLDER:
+        if not _get_config().PMS_LOGS_FOLDER:
             return "Plex log folder not set in the settings."
 
         if kwargs.get('log_type'):
             logfile = 'Plex Media ' + kwargs['log_type'].capitalize()
 
         log_file = (logfile or 'Plex Media Server') + '.log'
-        log_file_path = os.path.join(plexpy.CONFIG.PMS_LOGS_FOLDER, log_file)
+        log_file_path = os.path.join(_get_config().PMS_LOGS_FOLDER, log_file)
 
         if log_file and os.path.isfile(log_file_path):
             log_file_name = os.path.basename(log_file_path)
@@ -4979,7 +4983,7 @@ class WebInterface(object):
     @addtoapi()
     def delete_cache(self, folder='', **kwargs):
         """ Delete and recreate the cache directory. """
-        cache_dir = os.path.join(plexpy.CONFIG.CACHE_DIR, folder)
+        cache_dir = os.path.join(_get_config().CACHE_DIR, folder)
         result = 'success'
         msg = 'Cleared the %scache.' % (folder + ' ' if folder else '')
         try:
@@ -6016,7 +6020,7 @@ class WebInterface(object):
             ```
         """
         try:
-            pms_connect = pmsconnect.PmsConnect(token=plexpy.CONFIG.PMS_TOKEN)
+            pms_connect = pmsconnect.PmsConnect(token=_get_config().PMS_TOKEN)
             result = pms_connect.get_current_activity()
 
             if result:
@@ -6750,14 +6754,14 @@ class WebInterface(object):
     @cherrypy.expose
     def newsletter(self, *args, **kwargs):
         request_uri = cherrypy.request.wsgi_environ['REQUEST_URI']
-        if plexpy.CONFIG.NEWSLETTER_AUTH == 2:
+        if _get_config().NEWSLETTER_AUTH == 2:
             redirect_uri = request_uri.replace('/newsletter', '/newsletter_auth')
             raise cherrypy.HTTPRedirect(redirect_uri)
 
-        elif plexpy.CONFIG.NEWSLETTER_AUTH == 1 and plexpy.CONFIG.NEWSLETTER_PASSWORD:
+        elif _get_config().NEWSLETTER_AUTH == 1 and _get_config().NEWSLETTER_PASSWORD:
             if len(args) >= 2 and args[0] == 'image':
                 return self.newsletter_auth(*args, **kwargs)
-            elif kwargs.pop('key', None) == plexpy.CONFIG.NEWSLETTER_PASSWORD:
+            elif kwargs.pop('key', None) == _get_config().NEWSLETTER_PASSWORD:
                 return self.newsletter_auth(*args, **kwargs)
             else:
                 return serve_template(template_name="newsletter_auth.html",

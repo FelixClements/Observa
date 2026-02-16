@@ -17,6 +17,7 @@ from collections import defaultdict
 import json
 
 import plexpy
+from plexpy.config import get_config
 from sqlalchemy import Integer, delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
@@ -31,6 +32,13 @@ from plexpy.db.queries import time as time_queries
 from plexpy.db.session import session_scope
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 class ActivityProcessor(object):
@@ -288,14 +296,14 @@ class ActivityProcessor(object):
 
             real_play_time = stopped - helpers.cast_to_int(session['started']) - helpers.cast_to_int(session['paused_counter'])
 
-            if not is_import and plexpy.CONFIG.LOGGING_IGNORE_INTERVAL:
+            if not is_import and _get_config().LOGGING_IGNORE_INTERVAL:
                 if (session['media_type'] == 'movie' or session['media_type'] == 'episode') and \
-                        (real_play_time < int(plexpy.CONFIG.LOGGING_IGNORE_INTERVAL)):
+                        (real_play_time < int(_get_config().LOGGING_IGNORE_INTERVAL)):
                     logging_enabled = False
                     logger.debug("Tautulli ActivityProcessor :: Play duration for session %s ratingKey %s is %s secs "
                                  "which is less than %s seconds, so we're not logging it." %
                                  (session['session_key'], session['rating_key'], str(real_play_time),
-                                  plexpy.CONFIG.LOGGING_IGNORE_INTERVAL))
+                                  _get_config().LOGGING_IGNORE_INTERVAL))
             if not is_import and session['media_type'] == 'track':
                 if real_play_time < 15 and helpers.cast_to_int(session['duration']) >= 30:
                     logging_enabled = False
@@ -1011,7 +1019,7 @@ class ActivityProcessor(object):
                 .order_by(SessionContinued.stopped.desc())
             )
             last_stopped = queries.fetch_scalar(db_session, stmt, default=0) or 0
-        return int(started - last_stopped >= plexpy.CONFIG.NOTIFY_CONTINUED_SESSION_THRESHOLD)
+        return int(started - last_stopped >= _get_config().NOTIFY_CONTINUED_SESSION_THRESHOLD)
 
     def regroup_history(self):
         logger.info("Tautulli ActivityProcessor :: Creating database backup...")

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -23,6 +23,7 @@ from sqlalchemy.orm import aliased
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.db import datatables
 from plexpy.db import cleanup
 from plexpy.db import queries
@@ -37,10 +38,17 @@ from plexpy.util import helpers
 from plexpy.util import logger
 
 
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
+
+
 def refresh_libraries():
     logger.info("Tautulli Libraries :: Requesting libraries list refresh...")
 
-    server_id = plexpy.CONFIG.PMS_IDENTIFIER
+    server_id = _get_config().PMS_IDENTIFIER
     if not server_id:
         logger.error("Tautulli Libraries :: No PMS identifier, cannot refresh libraries. Verify server in settings.")
         return
@@ -96,7 +104,7 @@ def refresh_libraries():
                 update(LibrarySection)
                 .where(
                     or_(
-                        LibrarySection.server_id != plexpy.CONFIG.PMS_IDENTIFIER,
+                        LibrarySection.server_id != _get_config().PMS_IDENTIFIER,
                         LibrarySection.section_id.notin_(section_ids),
                     )
                 )
@@ -104,9 +112,9 @@ def refresh_libraries():
             )
             db_session.execute(stmt)
 
-        new_keys = plexpy.CONFIG.HOME_LIBRARY_CARDS + new_keys
-        plexpy.CONFIG.__setattr__('HOME_LIBRARY_CARDS', new_keys)
-        plexpy.CONFIG.write()
+        new_keys = _get_config().HOME_LIBRARY_CARDS + new_keys
+        _get_config().__setattr__('HOME_LIBRARY_CARDS', new_keys)
+        _get_config().write()
 
         logger.info("Tautulli Libraries :: Libraries list refreshed.")
         return True
@@ -121,7 +129,7 @@ def add_live_tv_library(refresh=False):
             select(LibrarySection.id)
             .where(
                 LibrarySection.section_id == common.LIVE_TV_SECTION_ID,
-                LibrarySection.server_id == plexpy.CONFIG.PMS_IDENTIFIER,
+                LibrarySection.server_id == _get_config().PMS_IDENTIFIER,
             )
             .limit(1)
         )
@@ -133,7 +141,7 @@ def add_live_tv_library(refresh=False):
         if not refresh:
             logger.info("Tautulli Libraries :: Adding Live TV library to the database.")
 
-        section_values = {'server_id': plexpy.CONFIG.PMS_IDENTIFIER,
+        section_values = {'server_id': _get_config().PMS_IDENTIFIER,
                           'section_id': common.LIVE_TV_SECTION_ID,
                           'section_name': common.LIVE_TV_SECTION_NAME,
                           'section_type': 'live',
@@ -145,7 +153,7 @@ def add_live_tv_library(refresh=False):
         stmt = (
             update(LibrarySection)
             .where(
-                LibrarySection.server_id == plexpy.CONFIG.PMS_IDENTIFIER,
+                LibrarySection.server_id == _get_config().PMS_IDENTIFIER,
                 LibrarySection.section_id == common.LIVE_TV_SECTION_ID,
             )
             .values(**section_values)
@@ -347,7 +355,7 @@ class Libraries(object):
             return default_return
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         filters = [LibrarySection.deleted_section == 0]
         shared_libraries = session.get_session_shared_libraries()
@@ -549,7 +557,7 @@ class Libraries(object):
             section_type = library_details['section_type']
 
         # Get play counts from the database
-        group_key = SessionHistory.reference_id if plexpy.CONFIG.GROUP_HISTORY_TABLES else SessionHistory.id
+        group_key = SessionHistory.reference_id if _get_config().GROUP_HISTORY_TABLES else SessionHistory.id
 
         if section_type in ('show', 'artist'):
             group_column = SessionHistory.grandparent_rating_key
@@ -779,7 +787,7 @@ class Libraries(object):
         # Import media info cache from json file
         if rating_key:
             try:
-                inFilePath = os.path.join(plexpy.CONFIG.CACHE_DIR,'media_info_%s-%s.json' % (section_id, rating_key))
+                inFilePath = os.path.join(_get_config().CACHE_DIR,'media_info_%s-%s.json' % (section_id, rating_key))
                 with open(inFilePath, 'r') as inFile:
                     data = json.load(inFile)
                     if isinstance(data, dict):
@@ -794,7 +802,7 @@ class Libraries(object):
 
         elif section_id:
             try:
-                inFilePath = os.path.join(plexpy.CONFIG.CACHE_DIR,'media_info_%s.json' % section_id)
+                inFilePath = os.path.join(_get_config().CACHE_DIR,'media_info_%s.json' % section_id)
                 with open(inFilePath, 'r') as inFile:
                     data = json.load(inFile)
                     if isinstance(data, dict):
@@ -817,7 +825,7 @@ class Libraries(object):
         
         if rating_key:
             try:
-                outFilePath = os.path.join(plexpy.CONFIG.CACHE_DIR,'media_info_%s-%s.json' % (section_id, rating_key))
+                outFilePath = os.path.join(_get_config().CACHE_DIR,'media_info_%s-%s.json' % (section_id, rating_key))
                 with open(outFilePath, 'w') as outFile:
                     json.dump({'last_refreshed': cache_time, 'rows': rows}, outFile)
                 logger.debug("Tautulli Libraries :: Saved media info cache for rating_key %s." % rating_key)
@@ -826,7 +834,7 @@ class Libraries(object):
 
         elif section_id:
             try:
-                outFilePath = os.path.join(plexpy.CONFIG.CACHE_DIR,'media_info_%s.json' % section_id)
+                outFilePath = os.path.join(_get_config().CACHE_DIR,'media_info_%s.json' % section_id)
                 with open(outFilePath, 'w') as outFile:
                     json.dump({'last_refreshed': cache_time, 'rows': rows}, outFile)
                 logger.debug("Tautulli Libraries :: Saved media info cache for section_id %s." % section_id)
@@ -878,7 +886,7 @@ class Libraries(object):
             return default_return
 
         if server_id is None:
-            server_id = plexpy.CONFIG.PMS_IDENTIFIER
+            server_id = _get_config().PMS_IDENTIFIER
 
         library_details = self.get_library_details(section_id=section_id, server_id=server_id,
                                                    include_last_accessed=include_last_accessed)
@@ -906,7 +914,7 @@ class Libraries(object):
 
     def get_library_details(self, section_id=None, server_id=None, include_last_accessed=False):
         if server_id is None:
-            server_id = plexpy.CONFIG.PMS_IDENTIFIER
+            server_id = _get_config().PMS_IDENTIFIER
 
         last_accessed_expr = (
             select(func.max(SessionHistory.started))
@@ -992,7 +1000,7 @@ class Libraries(object):
             return []
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         if query_days and query_days is not None:
             query_days = map(helpers.cast_to_int, str(query_days).split(','))
@@ -1048,7 +1056,7 @@ class Libraries(object):
             return []
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         user_stats = []
         section_id_int = helpers.cast_to_int(section_id) if str(section_id).isdigit() else None
@@ -1262,13 +1270,13 @@ class Libraries(object):
             return all(success)
 
         elif str(section_id).isdigit():
-            server_id = server_id or plexpy.CONFIG.PMS_IDENTIFIER
-            if server_id == plexpy.CONFIG.PMS_IDENTIFIER:
+            server_id = server_id or _get_config().PMS_IDENTIFIER
+            if server_id == _get_config().PMS_IDENTIFIER:
                 delete_success = cleanup.delete_library_history(section_id=section_id)
             else:
                 logger.warn("Tautulli Libraries :: Library history not deleted for library section_id %s "
                             "because library server_id %s does not match Plex server identifier %s."
-                            % (section_id, server_id, plexpy.CONFIG.PMS_IDENTIFIER))
+                            % (section_id, server_id, _get_config().PMS_IDENTIFIER))
                 delete_success = True
 
             if purge_only:
@@ -1354,7 +1362,7 @@ class Libraries(object):
 
         try:
             if section_id.isdigit():
-                [os.remove(os.path.join(plexpy.CONFIG.CACHE_DIR, f)) for f in os.listdir(plexpy.CONFIG.CACHE_DIR)
+                [os.remove(os.path.join(_get_config().CACHE_DIR, f)) for f in os.listdir(_get_config().CACHE_DIR)
                  if f.startswith('media_info_%s' % section_id) and f.endswith('.json')]
 
                 logger.debug("Tautulli Libraries :: Deleted media info table cache for section_id %s." % section_id)
@@ -1368,7 +1376,7 @@ class Libraries(object):
         # Refresh the PMS_URL to make sure the server_id is updated
         plextv.get_server_resources()
 
-        server_id = plexpy.CONFIG.PMS_IDENTIFIER
+        server_id = _get_config().PMS_IDENTIFIER
 
         try:
             logger.debug("Tautulli Libraries :: Deleting libraries where server_id does not match %s." % server_id)

@@ -22,6 +22,7 @@ from sqlalchemy.orm import aliased
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.db import datatables
 from plexpy.db import queries
 from plexpy.db.models import (
@@ -50,6 +51,14 @@ from plexpy.services import users
 from plexpy.web import session
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _config():
+    """Get config - prefers injected dependency, falls back to plexpy.CONFIG for backward compatibility."""
+    try:
+        return get_config()
+    except RuntimeError:
+        return plexpy.CONFIG
 
 # Temporarily store update_metadata row ids in memory to prevent rating_key collisions
 _UPDATE_METADATA_IDS = {
@@ -148,10 +157,10 @@ class DataFactory(object):
         custom_where = custom_where_sql
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _config().GROUP_HISTORY_TABLES
 
         if include_activity is None:
-            include_activity = plexpy.CONFIG.HISTORY_TABLE_ACTIVITY
+            include_activity = _config().HISTORY_TABLE_ACTIVITY
 
         if include_activity and reference_filter:
             include_activity = False
@@ -332,11 +341,11 @@ class DataFactory(object):
         filter_duration = 0
         total_duration = self.get_total_duration(custom_where=custom_where)
 
-        watched_percent = {'movie': plexpy.CONFIG.MOVIE_WATCHED_PERCENT,
-                           'episode': plexpy.CONFIG.TV_WATCHED_PERCENT,
-                           'track': plexpy.CONFIG.MUSIC_WATCHED_PERCENT,
+        watched_percent = {'movie': _config().MOVIE_WATCHED_PERCENT,
+                           'episode': _config().TV_WATCHED_PERCENT,
+                           'track': _config().MUSIC_WATCHED_PERCENT,
                            'photo': 0,
-                           'clip': plexpy.CONFIG.TV_WATCHED_PERCENT
+                           'clip': _config().TV_WATCHED_PERCENT
                            }
 
         rows = []
@@ -458,9 +467,9 @@ class DataFactory(object):
         if stat_id:
             stats_cards = [stat_id]
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _config().GROUP_HISTORY_TABLES
         if stats_cards is None:
-            stats_cards = plexpy.CONFIG.HOME_STATS_CARDS
+            stats_cards = _config().HOME_STATS_CARDS
 
         filters = self._timeframe_filters(time_range=time_range, before=before, after=after)
         if section_id:
@@ -1536,8 +1545,8 @@ class DataFactory(object):
 
                 elif stat == 'last_watched':
 
-                    movie_watched_percent = plexpy.CONFIG.MOVIE_WATCHED_PERCENT
-                    tv_watched_percent = plexpy.CONFIG.TV_WATCHED_PERCENT
+                    movie_watched_percent = _config().MOVIE_WATCHED_PERCENT
+                    tv_watched_percent = _config().TV_WATCHED_PERCENT
 
                     last_watched = []
                     try:
@@ -1567,19 +1576,19 @@ class DataFactory(object):
                             else_=tv_watched_percent,
                         ) / 100.0
 
-                        if plexpy.CONFIG.WATCHED_MARKER == 1:
+                        if _config().WATCHED_MARKER == 1:
                             watched_threshold_expr = case(
                                 (SessionHistoryMetadata.marker_credits_final.is_(None), percent_threshold_expr),
                                 else_=SessionHistoryMetadata.marker_credits_final,
                             )
                             watched_where = view_offset_expr >= watched_threshold_expr
-                        elif plexpy.CONFIG.WATCHED_MARKER == 2:
+                        elif _config().WATCHED_MARKER == 2:
                             watched_threshold_expr = case(
                                 (SessionHistoryMetadata.marker_credits_first.is_(None), percent_threshold_expr),
                                 else_=SessionHistoryMetadata.marker_credits_first,
                             )
                             watched_where = view_offset_expr >= watched_threshold_expr
-                        elif plexpy.CONFIG.WATCHED_MARKER == 3:
+                        elif _config().WATCHED_MARKER == 3:
                             first_marker = case(
                                 (SessionHistoryMetadata.marker_credits_first.is_(None), percent_threshold_expr),
                                 else_=SessionHistoryMetadata.marker_credits_first,

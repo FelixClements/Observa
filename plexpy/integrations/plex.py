@@ -16,6 +16,12 @@
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
 import plexpy
+from plexpy.integrations.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
+
 
 class DummyObject(object):
     def __init__(self, *args, **kwargs):
@@ -45,8 +51,8 @@ def initialize_plexapi():
 
 class Plex(object):
     def __init__(self, url=None, token=None):
-        url = url or plexpy.CONFIG.PMS_URL
-        token = token or plexpy.CONFIG.PMS_TOKEN
+        url = url or _get_config().PMS_URL
+        token = token or _get_config().PMS_TOKEN
         self.PlexServer = PlexObject(url, token)
 
     def get_library(self, section_id):

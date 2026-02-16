@@ -34,7 +34,8 @@ from urllib.parse import urlparse
 import bleach
 import paho.mqtt.client
 import paho.mqtt.publish
-import requests
+from plexpy.util import http as requests
+from plexpy.util.http import requests as requests_module
 from requests.auth import HTTPBasicAuth
 from sqlalchemy import delete, insert, select, true, update
 
@@ -52,6 +53,7 @@ import twitter
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.integrations import pmsconnect
 from plexpy.services import mobile_app
 from plexpy.services import users
@@ -61,6 +63,13 @@ from plexpy.db.models import MobileDevice, Notifier as NotifierModel, NotifyLog 
 from plexpy.db.session import session_scope
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 BROWSER_NOTIFIERS = {}
@@ -1542,10 +1551,10 @@ class FACEBOOK(Notifier):
     def _get_authorization(self, app_id='', app_secret='', redirect_uri=''):
         # Temporarily store settings in the config so we can retrieve them in Facebook step 2.
         # Assume the user won't be requesting authorization for multiple Facebook notifiers at the same time.
-        plexpy.CONFIG.FACEBOOK_APP_ID = app_id
-        plexpy.CONFIG.FACEBOOK_APP_SECRET = app_secret
-        plexpy.CONFIG.FACEBOOK_REDIRECT_URI = redirect_uri
-        plexpy.CONFIG.FACEBOOK_TOKEN = 'temp'
+        _get_config().FACEBOOK_APP_ID = app_id
+        _get_config().FACEBOOK_APP_SECRET = app_secret
+        _get_config().FACEBOOK_REDIRECT_URI = redirect_uri
+        _get_config().FACEBOOK_TOKEN = 'temp'
 
         return facebook.auth_url(app_id=app_id,
                                  canvas_url=redirect_uri,
@@ -1554,9 +1563,9 @@ class FACEBOOK(Notifier):
     def _get_credentials(self, code=''):
         logger.info("Tautulli Notifiers :: Requesting access token from {name}.".format(name=self.NAME))
 
-        app_id = plexpy.CONFIG.FACEBOOK_APP_ID
-        app_secret = plexpy.CONFIG.FACEBOOK_APP_SECRET
-        redirect_uri = plexpy.CONFIG.FACEBOOK_REDIRECT_URI
+        app_id = _get_config().FACEBOOK_APP_ID
+        app_secret = _get_config().FACEBOOK_APP_SECRET
+        redirect_uri = _get_config().FACEBOOK_REDIRECT_URI
 
         try:
             # Request user access token
@@ -1572,17 +1581,17 @@ class FACEBOOK(Notifier):
             response = api.extend_access_token(app_id=app_id,
                                                app_secret=app_secret)
 
-            plexpy.CONFIG.FACEBOOK_TOKEN = response['access_token']
+            _get_config().FACEBOOK_TOKEN = response['access_token']
         except Exception as e:
             logger.error("Tautulli Notifiers :: Error requesting {name} access token: {e}".format(name=self.NAME, e=e))
-            plexpy.CONFIG.FACEBOOK_TOKEN = ''
+            _get_config().FACEBOOK_TOKEN = ''
 
         # Clear out temporary config values
-        plexpy.CONFIG.FACEBOOK_APP_ID = ''
-        plexpy.CONFIG.FACEBOOK_APP_SECRET = ''
-        plexpy.CONFIG.FACEBOOK_REDIRECT_URI = ''
+        _get_config().FACEBOOK_APP_ID = ''
+        _get_config().FACEBOOK_APP_SECRET = ''
+        _get_config().FACEBOOK_REDIRECT_URI = ''
 
-        return plexpy.CONFIG.FACEBOOK_TOKEN
+        return _get_config().FACEBOOK_TOKEN
 
     def _post_facebook(self, **data):
         if self.config['group_id']:
@@ -2954,7 +2963,7 @@ class PLEXMOBILEAPP(Notifier):
             'to': self.config['user_ids'],
             'data': {
                 'provider': {
-                    'identifier': plexpy.CONFIG.PMS_IDENTIFIER,
+                    'identifier': _get_config().PMS_IDENTIFIER,
                     'title': helpers.pms_name()
                 }
             }
@@ -3060,11 +3069,11 @@ class PLEXMOBILEAPP(Notifier):
 
             data['metadata'] = metadata
             data['uri'] = 'server://{}/com.plexapp.plugins.library/library/metadata/{}'.format(
-                plexpy.CONFIG.PMS_IDENTIFIER, uri_rating_key or pretty_metadata.parameters['rating_key']
+                _get_config().PMS_IDENTIFIER, uri_rating_key or pretty_metadata.parameters['rating_key']
             )
             data['play'] = self.config['tap_action'] == 'play'
 
-        headers = {'X-Plex-Token': plexpy.CONFIG.PMS_TOKEN}
+        headers = {'X-Plex-Token': _get_config().PMS_TOKEN}
 
         return self.make_request(self.NOTIFICATION_URL, headers=headers, json=data)
 
@@ -3531,15 +3540,15 @@ class SCRIPTS(Notifier):
     def run_script(self, script, user_id):
         # Common environment variables
         custom_env = {
-            'PLEX_URL': plexpy.CONFIG.PMS_URL,
-            'PLEX_TOKEN': plexpy.CONFIG.PMS_TOKEN,
+            'PLEX_URL': _get_config().PMS_URL,
+            'PLEX_TOKEN': _get_config().PMS_TOKEN,
             'PLEX_USER_TOKEN': '',
             'TAUTULLI_URL': helpers.get_plexpy_url(hostname='localhost'),
-            'TAUTULLI_PUBLIC_URL': plexpy.CONFIG.HTTP_BASE_URL + plexpy.HTTP_ROOT,
-            'TAUTULLI_APIKEY': plexpy.CONFIG.API_KEY,
+            'TAUTULLI_PUBLIC_URL': _get_config().HTTP_BASE_URL + plexpy.HTTP_ROOT,
+            'TAUTULLI_APIKEY': _get_config().API_KEY,
             'TAUTULLI_ENCODING': plexpy.SYS_ENCODING,
             'TAUTULLI_PYTHON_VERSION': common.PYTHON_VERSION,
-            'PLEXAPI_LOG_PATH': os.path.join(plexpy.CONFIG.LOG_DIR, 'plexapi_script.log')
+            'PLEXAPI_LOG_PATH': os.path.join(_get_config().LOG_DIR, 'plexapi_script.log')
             }
 
         if user_id:
@@ -3982,7 +3991,7 @@ class TAUTULLIREMOTEAPP(Notifier):
                                 'cipher_text': base64.b64encode(encrypted_data),
                                 'nonce': base64.b64encode(nonce),
                                 'salt': base64.b64encode(salt),
-                                'server_id': plexpy.CONFIG.PMS_UUID}
+                                'server_id': _get_config().PMS_UUID}
                        }
         else:
             logger.warn("Tautulli Notifiers :: Cryptography library is missing. "
@@ -3994,7 +4003,7 @@ class TAUTULLIREMOTEAPP(Notifier):
                        'contents': {'en': 'Tautulli Notification'},
                        'data': {'encrypted': False,
                                 'plain_text': plaintext_data,
-                                'server_id': plexpy.CONFIG.PMS_UUID}
+                                'server_id': _get_config().PMS_UUID}
                        }
 
         #logger.debug("OneSignal payload: {}".format(payload))
@@ -4031,7 +4040,7 @@ class TAUTULLIREMOTEAPP(Notifier):
                                'Instructions can be found in the '
                                '<a href="' + helpers.anon_url(
                                  'https://github.com/%s/%s/wiki/Frequently-Asked-Questions#notifications-cryptography'
-                                 % (plexpy.CONFIG.GIT_USER, plexpy.CONFIG.GIT_REPO)) + '" target="_blank" rel="noreferrer">FAQ</a>.' ,
+                                 % (_get_config().GIT_USER, _get_config().GIT_REPO)) + '" target="_blank" rel="noreferrer">FAQ</a>.' ,
                 'input_type': 'help'
             })
         else:

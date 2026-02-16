@@ -13,13 +13,13 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
+import configparser
 import os
 import re
 import time
 import threading
 import zipfile
 
-from configobj import ConfigObj, ParseError
 from plexpy.util.hashing_passwords import make_hash
 
 import plexpy
@@ -448,9 +448,12 @@ class Config(object):
     def __init__(self, config_file, is_import=False):
         """ Initialize the config with values from a file """
         self._config_file = config_file
+        self._config = configparser.ConfigParser()
         try:
-            self._config = ConfigObj(self._config_file, encoding='utf-8')
-        except ParseError as e:
+            # Read the config file if it exists
+            if os.path.exists(self._config_file):
+                self._config.read(self._config_file, encoding='utf-8')
+        except configparser.Error as e:
             logger.error("Tautulli Config :: Error reading configuration file: %s", e)
             raise
 
@@ -484,8 +487,8 @@ class Config(object):
 
     def check_section(self, section):
         """ Check if INI section exists, if not create it """
-        if section not in self._config:
-            self._config[section] = {}
+        if not self._config.has_section(section):
+            self._config.add_section(section)
 
     def check_setting(self, name):
         """ Check if INI key exists, if not create it """
@@ -531,30 +534,20 @@ class Config(object):
 
     def write(self):
         """ Make a copy of the stored config and write it to the configured file """
-        new_config = ConfigObj(encoding="UTF-8")
-        new_config.filename = self._config_file
+        new_config = configparser.ConfigParser()
 
-        # first copy over everything from the old config, even if it is not
-        # correctly defined to keep from losing data
-        for key, subkeys in self._config.items():
-            if key not in new_config:
-                new_config[key] = {}
-            for subkey, value in subkeys.items():
-                new_config[key][subkey] = value
-
-        # next make sure that everything we expect to have defined is so
         for key in _CONFIG_DEFINITIONS:
             key, definition_type, section, ini_key, default = self._define(key)
             self.check_setting(key)
-            if section not in new_config:
-                new_config[section] = {}
-            new_config[section][ini_key] = self._config[section][ini_key]
+            if not new_config.has_section(section):
+                new_config.add_section(section)
+            new_config.set(section, ini_key, str(self._config[section][ini_key]))
 
-        # Write it to file
         logger.info("Tautulli Config :: Writing configuration to file")
 
         try:
-            new_config.write()
+            with open(self._config_file, 'w', encoding='utf-8') as f:
+                new_config.write(f)
         except IOError as e:
             logger.error("Tautulli Config :: Error writing configuration file: %s", e)
 

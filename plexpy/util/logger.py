@@ -26,9 +26,17 @@ import threading
 import traceback
 
 import plexpy
+from plexpy.config import get_config
 from plexpy.services import users
 from plexpy.config.core import _BLACKLIST_KEYS, _WHITELIST_KEYS
 from plexpy.util import helpers
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return plexpy.CONFIG
 
 
 # These settings are for file logging only
@@ -107,7 +115,7 @@ class BlacklistFilter(logging.Filter):
     Log filter for blacklisted tokens and passwords
     """
     def filter(self, record):
-        if not plexpy.CONFIG.LOG_BLACKLIST:
+        if not _get_config().LOG_BLACKLIST:
             return True
 
         for item in _BLACKLIST_WORDS:
@@ -137,7 +145,7 @@ class UsernameFilter(logging.Filter):
     Log filter for usernames
     """
     def filter(self, record):
-        if not plexpy.CONFIG.LOG_BLACKLIST_USERNAMES:
+        if not _get_config().LOG_BLACKLIST_USERNAMES:
             return True
 
         if not plexpy._INITIALIZED:
@@ -171,7 +179,7 @@ class RegexFilter(logging.Filter):
     REGEX = re.compile(r'')
 
     def filter(self, record):
-        if not plexpy.CONFIG.LOG_BLACKLIST:
+        if not _get_config().LOG_BLACKLIST:
             return True
 
         try:
@@ -351,7 +359,8 @@ def initLogger(console=False, log_dir=False, verbose=False):
     # Add filters to log handlers
     # Only add filters after the config file has been initialized
     # Nothing prior to initialization should contain sensitive information
-    if not plexpy.DEV and plexpy.CONFIG:
+    config = _get_config()
+    if not plexpy.DEV and config:
         log_handlers = logger.handlers + \
                        logger_api.handlers + \
                        logger_plex_websocket.handlers + \

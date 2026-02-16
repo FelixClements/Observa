@@ -28,24 +28,29 @@ from plexpy.web import webauth
 from plexpy.util import logger
 from plexpy.util.helpers import create_https_certificates
 from plexpy.web.webserve import WebInterface, BaseRedirect
+from plexpy.web.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 def start():
     logger.info("Tautulli WebStart :: Initializing Tautulli web server...")
     web_config = {
         'http_port': plexpy.HTTP_PORT,
-        'http_host': plexpy.CONFIG.HTTP_HOST,
-        'http_root': plexpy.CONFIG.HTTP_ROOT,
-        'http_environment': plexpy.CONFIG.HTTP_ENVIRONMENT,
-        'http_proxy': plexpy.CONFIG.HTTP_PROXY,
-        'enable_https': plexpy.CONFIG.ENABLE_HTTPS,
-        'https_cert': plexpy.CONFIG.HTTPS_CERT,
-        'https_cert_chain': plexpy.CONFIG.HTTPS_CERT_CHAIN,
-        'https_key': plexpy.CONFIG.HTTPS_KEY,
-        'https_min_tls_version': plexpy.CONFIG.HTTPS_MIN_TLS_VERSION,
-        'http_username': plexpy.CONFIG.HTTP_USERNAME,
-        'http_password': plexpy.CONFIG.HTTP_PASSWORD,
-        'http_basic_auth': plexpy.CONFIG.HTTP_BASIC_AUTH
+        'http_host': _get_config().HTTP_HOST,
+        'http_root': _get_config().HTTP_ROOT,
+        'http_environment': _get_config().HTTP_ENVIRONMENT,
+        'http_proxy': _get_config().HTTP_PROXY,
+        'enable_https': _get_config().ENABLE_HTTPS,
+        'https_cert': _get_config().HTTPS_CERT,
+        'https_cert_chain': _get_config().HTTPS_CERT_CHAIN,
+        'https_key': _get_config().HTTPS_KEY,
+        'https_min_tls_version': _get_config().HTTPS_MIN_TLS_VERSION,
+        'http_username': _get_config().HTTP_USERNAME,
+        'http_password': _get_config().HTTP_PASSWORD,
+        'http_basic_auth': _get_config().HTTP_BASIC_AUTH
     }
     initialize(web_config)
 
@@ -73,7 +78,7 @@ def initialize(options):
 
     if enable_https:
         # If either the HTTPS certificate or key do not exist, try to make self-signed ones.
-        if plexpy.CONFIG.HTTPS_CREATE_CERT and \
+        if _get_config().HTTPS_CREATE_CERT and \
                 (not (https_cert and os.path.exists(https_cert)) or
                  not (https_key and os.path.exists(https_key))):
             if not create_https_certificates(https_cert, https_key):
@@ -88,7 +93,7 @@ def initialize(options):
         'server.socket_port': options['http_port'],
         'server.socket_host': options['http_host'],
         'environment': options['http_environment'],
-        'server.thread_pool': plexpy.CONFIG.HTTP_THREAD_POOL,
+        'server.thread_pool': _get_config().HTTP_THREAD_POOL,
         'server.max_request_body_size': 1073741824,
         'server.socket_timeout': 60,
         'tools.encode.on': True,
@@ -127,7 +132,7 @@ def initialize(options):
 
     if options['http_password']:
         login_allowed = ["Tautulli admin (username is '%s')" % options['http_username']]
-        if plexpy.CONFIG.HTTP_PLEX_ADMIN:
+        if _get_config().HTTP_PLEX_ADMIN:
             login_allowed.append("Plex admin")
 
         logger.info("Tautulli WebStart :: Web server authentication is enabled: %s.", ' and '.join(login_allowed))
@@ -150,7 +155,7 @@ def initialize(options):
     else:
         plexpy.HTTP_ROOT = options['http_root'] = '/'
 
-    logger.info("Tautulli WebStart :: Thread Pool Size: %d.", plexpy.CONFIG.HTTP_THREAD_POOL)
+    logger.info("Tautulli WebStart :: Thread Pool Size: %d.", _get_config().HTTP_THREAD_POOL)
     cherrypy.config.update(options_dict)
 
     conf = {
@@ -238,7 +243,7 @@ def initialize(options):
         },
         '/cache': {
             'tools.staticdir.on': True,
-            'tools.staticdir.dir': plexpy.CONFIG.CACHE_DIR,
+            'tools.staticdir.dir': _get_config().CACHE_DIR,
             'tools.caching.on': True,
             'tools.caching.force': True,
             'tools.caching.delay': 0,

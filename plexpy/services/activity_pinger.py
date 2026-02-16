@@ -1,4 +1,4 @@
-﻿# This file is part of Tautulli.
+# This file is part of Tautulli.
 #
 #  Tautulli is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 import threading
 
 import plexpy
+from plexpy.config import get_config
 from sqlalchemy import func, select, update
 
 from plexpy.integrations import pmsconnect
@@ -30,6 +31,13 @@ from plexpy.services import notification_handler
 from plexpy.util import helpers
 from plexpy.util import logger
 from plexpy.web import web_socket
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 monitor_lock = threading.Lock()
@@ -86,7 +94,7 @@ def check_active_sessions(ws_request=False):
                                 # The stream is still paused so we need to increment the paused_counter
                                 # Using the set config parameter as the interval, probably not the most accurate but
                                 # it will have to do for now. If it's a websocket request don't use this method.
-                                paused_counter = int(stream['paused_counter']) + plexpy.CONFIG.MONITORING_INTERVAL
+                                paused_counter = int(stream['paused_counter']) + _get_config().MONITORING_INTERVAL
                                 with session_scope() as db_session:
                                     stmt = (
                                         update(SessionModel)
@@ -98,7 +106,7 @@ def check_active_sessions(ws_request=False):
                                     )
                                     db_session.execute(stmt)
 
-                            if session['state'] == 'buffering' and plexpy.CONFIG.BUFFER_THRESHOLD > 0:
+                            if session['state'] == 'buffering' and _get_config().BUFFER_THRESHOLD > 0:
                                 # The stream is buffering so we need to increment the buffer_count
                                 # We're going just increment on every monitor ping,
                                 # would be difficult to keep track otherwise
@@ -127,11 +135,11 @@ def check_active_sessions(ws_request=False):
                                 if not buffer_values:
                                     continue
 
-                                if buffer_values[0]['buffer_count'] >= plexpy.CONFIG.BUFFER_THRESHOLD:
+                                if buffer_values[0]['buffer_count'] >= _get_config().BUFFER_THRESHOLD:
                                     # Push any notifications -
                                     # Push it on it's own thread so we don't hold up our db actions
                                     # Our first buffer notification
-                                    if buffer_values[0]['buffer_count'] == plexpy.CONFIG.BUFFER_THRESHOLD:
+                                    if buffer_values[0]['buffer_count'] == _get_config().BUFFER_THRESHOLD:
                                         logger.info("Tautulli Monitor :: User '%s' has triggered a buffer warning."
                                                     % stream['user'])
                                         # Set the buffer trigger time
@@ -151,7 +159,7 @@ def check_active_sessions(ws_request=False):
                                     else:
                                         # Subsequent buffer notifications after wait time
                                         if helpers.timestamp() > buffer_values[0]['buffer_last_triggered'] + \
-                                                plexpy.CONFIG.BUFFER_WAIT:
+                                                _get_config().BUFFER_WAIT:
                                             logger.info("Tautulli Monitor :: User '%s' has triggered multiple buffer warnings."
                                                     % stream['user'])
                                             # Set the buffer trigger time
@@ -179,9 +187,9 @@ def check_active_sessions(ws_request=False):
                             if session['state'] != 'buffering':
                                 progress_percent = helpers.get_percent(session['view_offset'], session['duration'])
                                 notify_states = notification_handler.get_notify_state(session=session)
-                                if (session['media_type'] == 'movie' and progress_percent >= plexpy.CONFIG.MOVIE_WATCHED_PERCENT or
-                                    session['media_type'] == 'episode' and progress_percent >= plexpy.CONFIG.TV_WATCHED_PERCENT or
-                                    session['media_type'] == 'track' and progress_percent >= plexpy.CONFIG.MUSIC_WATCHED_PERCENT) \
+                                if (session['media_type'] == 'movie' and progress_percent >= _get_config().MOVIE_WATCHED_PERCENT or
+                                    session['media_type'] == 'episode' and progress_percent >= _get_config().TV_WATCHED_PERCENT or
+                                    session['media_type'] == 'track' and progress_percent >= _get_config().MUSIC_WATCHED_PERCENT) \
                                     and not any(d['notify_action'] == 'on_watched' for d in notify_states):
                                     plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_watched'})
 
@@ -206,9 +214,9 @@ def check_active_sessions(ws_request=False):
 
                         progress_percent = helpers.get_percent(stream['view_offset'], stream['duration'])
                         notify_states = notification_handler.get_notify_state(session=stream)
-                        if (stream['media_type'] == 'movie' and progress_percent >= plexpy.CONFIG.MOVIE_WATCHED_PERCENT or
-                            stream['media_type'] == 'episode' and progress_percent >= plexpy.CONFIG.TV_WATCHED_PERCENT or
-                            stream['media_type'] == 'track' and progress_percent >= plexpy.CONFIG.MUSIC_WATCHED_PERCENT) \
+                        if (stream['media_type'] == 'movie' and progress_percent >= _get_config().MOVIE_WATCHED_PERCENT or
+                            stream['media_type'] == 'episode' and progress_percent >= _get_config().TV_WATCHED_PERCENT or
+                            stream['media_type'] == 'track' and progress_percent >= _get_config().MUSIC_WATCHED_PERCENT) \
                             and not any(d['notify_action'] == 'on_watched' for d in notify_states):
                             plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_watched'})
 
@@ -225,7 +233,7 @@ def check_active_sessions(ws_request=False):
                     else:
                         stream['write_attempts'] += 1
 
-                        if stream['write_attempts'] < plexpy.CONFIG.SESSION_DB_WRITE_ATTEMPTS:
+                        if stream['write_attempts'] < _get_config().SESSION_DB_WRITE_ATTEMPTS:
                             logger.warn("Tautulli Monitor :: Failed to write sessionKey %s ratingKey %s to the database. " \
                                         "Will try again on the next pass. Write attempt %s."
                                         % (stream['session_key'], stream['rating_key'], str(stream['write_attempts'])))
@@ -252,7 +260,7 @@ def check_active_sessions(ws_request=False):
 
 
 def connect_server(log=True, startup=False):
-    if plexpy.CONFIG.PMS_IS_CLOUD:
+    if _get_config().PMS_IS_CLOUD:
         if log:
             logger.info("Tautulli Monitor :: Checking for Plex Cloud server status...")
 
@@ -293,7 +301,7 @@ def check_server_updates():
         download_info = plex_tv.get_plex_update()
 
         if download_info:
-            logger.info("Tautulli Monitor :: Current PMS version: %s", plexpy.CONFIG.PMS_VERSION)
+            logger.info("Tautulli Monitor :: Current PMS version: %s", _get_config().PMS_VERSION)
 
             if download_info['update_available']:
                 logger.info("Tautulli Monitor :: PMS update available version: %s", download_info['version'])

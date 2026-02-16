@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 #  This file is part of Tautulli.
 #
@@ -28,6 +28,7 @@ from sqlalchemy import delete, func, select
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.services import libraries
 from plexpy.integrations import pmsconnect
 from plexpy.db.models import Newsletter as NewsletterModel, NewsletterLog
@@ -36,6 +37,13 @@ from plexpy.services import newsletter_handler
 from plexpy.util import helpers
 from plexpy.util import logger
 from plexpy.services.notifiers import send_notification, EMAIL
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
 
 
 AGENT_IDS = {
@@ -347,14 +355,14 @@ def blacklist_logger():
 
 
 def serve_template(template_name, **kwargs):
-    if plexpy.CONFIG.NEWSLETTER_CUSTOM_DIR:
+    if _get_config().NEWSLETTER_CUSTOM_DIR:
         logger.info("Tautulli Newsletters :: Using custom newsletter template directory.")
-        template_dir = plexpy.CONFIG.NEWSLETTER_CUSTOM_DIR
+        template_dir = _get_config().NEWSLETTER_CUSTOM_DIR
     else:
         interface_dir = os.path.join(plexpy.ASSETS_DIR, 'interfaces')
-        template_dir = os.path.join(interface_dir, plexpy.CONFIG.NEWSLETTER_TEMPLATES)
+        template_dir = os.path.join(interface_dir, _get_config().NEWSLETTER_TEMPLATES)
 
-        if not plexpy.CONFIG.NEWSLETTER_INLINE_STYLES:
+        if not _get_config().NEWSLETTER_INLINE_STYLES:
             template_name = template_name.replace('.html', '.internal.html')
 
     _hplookup = TemplateLookup(directories=[template_dir], default_filters=['unicode', 'h'])
@@ -561,7 +569,7 @@ class Newsletter(object):
 
     def _save(self):
         newsletter_file = self.filename_formatted
-        newsletter_folder = plexpy.CONFIG.NEWSLETTER_DIR or os.path.join(plexpy.DATA_DIR, 'newsletters')
+        newsletter_folder = _get_config().NEWSLETTER_DIR or os.path.join(plexpy.DATA_DIR, 'newsletters')
         newsletter_file_fp = os.path.join(newsletter_folder, newsletter_file)
 
         # In case the user has deleted it manually
@@ -585,7 +593,7 @@ class Newsletter(object):
             newsletter_stripped = ''.join(l.strip() for l in self.newsletter.splitlines())
 
             plaintext = 'HTML email support is required to view the newsletter.\n'
-            if plexpy.CONFIG.NEWSLETTER_SELF_HOSTED and plexpy.CONFIG.HTTP_BASE_URL:
+            if _get_config().NEWSLETTER_SELF_HOSTED and _get_config().HTTP_BASE_URL:
                 plaintext += self._DEFAULT_BODY.format(**self.parameters)
 
             email_reply_msg_id = self.email_reply_msg_id if self.config['threaded'] else None
@@ -624,10 +632,10 @@ class Newsletter(object):
     def _build_params(self):
         from plexpy.services.notification_handler import CustomArrow
         
-        date_format = helpers.momentjs_to_arrow(plexpy.CONFIG.DATE_FORMAT)
+        date_format = helpers.momentjs_to_arrow(_get_config().DATE_FORMAT)
 
-        if plexpy.CONFIG.NEWSLETTER_SELF_HOSTED and plexpy.CONFIG.HTTP_BASE_URL:
-            base_url = plexpy.CONFIG.HTTP_BASE_URL + plexpy.HTTP_ROOT + 'newsletter/'
+        if _get_config().NEWSLETTER_SELF_HOSTED and _get_config().HTTP_BASE_URL:
+            base_url = _get_config().HTTP_BASE_URL + plexpy.HTTP_ROOT + 'newsletter/'
         else:
             base_url = helpers.get_plexpy_url() + '/newsletter/'
 
@@ -651,7 +659,7 @@ class Newsletter(object):
             'newsletter_uuid': self.uuid,
             'newsletter_id': self.newsletter_id,
             'newsletter_id_name': self.newsletter_id_name,
-            'newsletter_password': plexpy.CONFIG.NEWSLETTER_PASSWORD
+            'newsletter_password': _get_config().NEWSLETTER_PASSWORD
         }
 
         return parameters
@@ -992,8 +1000,8 @@ class RecentlyAdded(Newsletter):
                 newsletter_libraries.append(s['section_name'])
 
         parameters['newsletter_libraries'] = ', '.join(sorted(newsletter_libraries))
-        parameters['pms_identifier'] = plexpy.CONFIG.PMS_IDENTIFIER
-        parameters['pms_web_url'] = plexpy.CONFIG.PMS_WEB_URL
+        parameters['pms_identifier'] = _get_config().PMS_IDENTIFIER
+        parameters['pms_web_url'] = _get_config().PMS_WEB_URL
 
         return parameters
 

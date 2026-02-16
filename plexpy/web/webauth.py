@@ -35,14 +35,12 @@ from plexpy.integrations.plextv import PlexTV
 from plexpy.services.users import Users, refresh_users
 from plexpy.util import logger
 from plexpy.util.helpers import timestamp
+from plexpy.web.dependencies import get_config
 
-# Monkey patch SameSite support into cookies.
-# https://stackoverflow.com/a/50813092
-try:
-    from http.cookies import Morsel
-except ImportError:
-    from Cookie import Morsel
-Morsel._reserved[str('samesite')] = str('SameSite')
+
+def _get_config():
+    return get_config()
+
 
 JWT_ALGORITHM = 'HS256'
 JWT_COOKIE_NAME = 'tautulli_token_'
@@ -70,7 +68,7 @@ def plex_user_login(token=None, headers=None):
         if user_id != str(user_details['user_id']):
             # The user is not in the database.
             return None
-        elif plexpy.CONFIG.HTTP_PLEX_ADMIN and user_details['is_admin']:
+        elif _get_config().HTTP_PLEX_ADMIN and user_details['is_admin']:
             # Plex admin login
             return user_details, 'admin'
         elif not user_details['allow_guest'] or user_details['deleted_user']:
@@ -78,7 +76,7 @@ def plex_user_login(token=None, headers=None):
             return None
 
         # Stop here if guest access is not enabled
-        if not plexpy.CONFIG.ALLOW_GUEST_ACCESS:
+        if not _get_config().ALLOW_GUEST_ACCESS:
             return None
 
         # The user is in the database, and guest access is enabled, so try to retrieve a server token.
@@ -123,12 +121,12 @@ def check_credentials(username=None, password=None, token=None, admin_login='0',
     Returns True and the user group on success or False and no user group"""
 
     if username and password:
-        if plexpy.CONFIG.HTTP_PASSWORD:
+        if _get_config().HTTP_PASSWORD:
             user_details = {'user_id': None, 'username': username}
-            if username == plexpy.CONFIG.HTTP_USERNAME and check_hash(password, plexpy.CONFIG.HTTP_PASSWORD):
+            if username == _get_config().HTTP_USERNAME and check_hash(password, _get_config().HTTP_PASSWORD):
                 return True, user_details, 'admin'
 
-    if plexpy.CONFIG.HTTP_PLEX_ADMIN or (not admin_login == '1' and plexpy.CONFIG.ALLOW_GUEST_ACCESS):
+    if _get_config().HTTP_PLEX_ADMIN or (not admin_login == '1' and _get_config().ALLOW_GUEST_ACCESS):
         plex_login = plex_user_login(token=token, headers=headers)
         if plex_login is not None:
             return True, plex_login[0], plex_login[1]
@@ -137,7 +135,7 @@ def check_credentials(username=None, password=None, token=None, admin_login='0',
 
 
 def get_jwt_token():
-    jwt_cookie = str(JWT_COOKIE_NAME + plexpy.CONFIG.PMS_UUID)
+    jwt_cookie = str(JWT_COOKIE_NAME + _get_config().PMS_UUID)
     jwt_token = cherrypy.request.cookie.get(jwt_cookie)
 
     if jwt_token:
@@ -150,7 +148,7 @@ def check_jwt_token():
     if jwt_token:
         try:
             payload = jwt.decode(
-                jwt_token, plexpy.CONFIG.JWT_SECRET, leeway=timedelta(seconds=10), algorithms=[JWT_ALGORITHM]
+                jwt_token, _get_config().JWT_SECRET, leeway=timedelta(seconds=10), algorithms=[JWT_ALGORITHM]
             )
         except (jwt.DecodeError, jwt.ExpiredSignatureError):
             return None
@@ -268,11 +266,11 @@ def check_rate_limit(ip_address):
     except ValueError:
         last_success = 0
 
-    max_timestamp = max(last_success, last_timestamp - plexpy.CONFIG.HTTP_RATE_LIMIT_ATTEMPTS_INTERVAL)
+    max_timestamp = max(last_success, last_timestamp - _get_config().HTTP_RATE_LIMIT_ATTEMPTS_INTERVAL)
     attempts = [login for login in result if login['timestamp'] >= max_timestamp and not login['success']]
 
-    if len(attempts) >= plexpy.CONFIG.HTTP_RATE_LIMIT_ATTEMPTS:
-        return max(last_timestamp - (timestamp() - plexpy.CONFIG.HTTP_RATE_LIMIT_LOCKOUT_TIME), 0)
+    if len(attempts) >= _get_config().HTTP_RATE_LIMIT_ATTEMPTS:
+        return max(last_timestamp - (timestamp() - _get_config().HTTP_RATE_LIMIT_LOCKOUT_TIME), 0)
 
 
 # Controller to provide login and logout actions
@@ -280,7 +278,7 @@ def check_rate_limit(ip_address):
 class AuthController(object):
 
     def check_auth_enabled(self):
-        if not plexpy.CONFIG.HTTP_BASIC_AUTH and plexpy.CONFIG.HTTP_PASSWORD:
+        if not _get_config().HTTP_BASIC_AUTH and _get_config().HTTP_PASSWORD:
             return
         raise cherrypy.HTTPRedirect(plexpy.HTTP_ROOT)
 
@@ -339,7 +337,7 @@ class AuthController(object):
             self.on_logout(username=payload['user'],
                            user_group=payload['user_group'])
 
-        jwt_cookie = str(JWT_COOKIE_NAME + plexpy.CONFIG.PMS_UUID)
+        jwt_cookie = str(JWT_COOKIE_NAME + _get_config().PMS_UUID)
         cherrypy.response.cookie[jwt_cookie] = ''
         cherrypy.response.cookie[jwt_cookie]['max-age'] = 0
         cherrypy.response.cookie[jwt_cookie]['path'] = plexpy.HTTP_ROOT.rstrip('/') or '/'
@@ -391,7 +389,7 @@ class AuthController(object):
                 'exp': expiry
             }
 
-            jwt_token = jwt.encode(payload, plexpy.CONFIG.JWT_SECRET, algorithm=JWT_ALGORITHM)
+            jwt_token = jwt.encode(payload, _get_config().JWT_SECRET, algorithm=JWT_ALGORITHM)
 
             self.on_login(username=user_details['username'],
                           user_id=user_details['user_id'],
@@ -401,7 +399,7 @@ class AuthController(object):
                           expiry=expiry,
                           jwt_token=jwt_token)
 
-            jwt_cookie = str(JWT_COOKIE_NAME + plexpy.CONFIG.PMS_UUID)
+            jwt_cookie = str(JWT_COOKIE_NAME + _get_config().PMS_UUID)
             cherrypy.response.cookie[jwt_cookie] = jwt_token
             cherrypy.response.cookie[jwt_cookie]['max-age'] = int(time_delta.total_seconds())
             cherrypy.response.cookie[jwt_cookie]['path'] = plexpy.HTTP_ROOT.rstrip('/') or '/'
@@ -410,7 +408,7 @@ class AuthController(object):
 
             cherrypy.request.login = payload
             cherrypy.response.status = 200
-            return {'status': 'success', 'token': jwt_token, 'uuid': plexpy.CONFIG.PMS_UUID}
+            return {'status': 'success', 'token': jwt_token, 'uuid': _get_config().PMS_UUID}
 
         elif admin_login == '1' and username:
             self.on_login(username=username)

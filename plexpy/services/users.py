@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -24,6 +24,7 @@ from sqlalchemy.orm import aliased
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.db import datatables
 from plexpy.db import cleanup
 from plexpy.db import queries
@@ -37,11 +38,18 @@ from plexpy.util import helpers
 from plexpy.util import logger
 
 
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return plexpy.CONFIG
+
+
 def refresh_users():
     logger.info("Tautulli Users :: Requesting users list refresh...")
     result = plextv.PlexTV().get_full_users_list()
 
-    server_id = plexpy.CONFIG.PMS_IDENTIFIER
+    server_id = _get_config().PMS_IDENTIFIER
     if not server_id:
         logger.error("Tautulli Users :: No PMS identifier, cannot refresh users. Verify server in settings.")
         return
@@ -125,7 +133,7 @@ class Users(object):
             return default_return
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         filters = [User.deleted_user == 0]
         session_user_id = session.get_session_user_id()
@@ -583,7 +591,7 @@ class Users(object):
             return []
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         if query_days and query_days is not None:
             query_days = map(helpers.cast_to_int, str(query_days).split(','))
@@ -634,7 +642,7 @@ class Users(object):
             return []
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         player_stats = []
         result_id = 0

@@ -24,15 +24,23 @@ import tarfile
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.util import request
 from plexpy.util import helpers
 from plexpy.util import logger
 
 
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
+
+
 def runGit(args):
 
-    if plexpy.CONFIG.GIT_PATH:
-        git_locations = ['"' + plexpy.CONFIG.GIT_PATH + '"']
+    if _get_config().GIT_PATH:
+        git_locations = ['"' + _get_config().GIT_PATH + '"']
     else:
         git_locations = ['git']
 
@@ -80,9 +88,9 @@ def get_version():
                 logger.error('Output does not look like a hash, not using it.')
                 cur_commit_hash = None
 
-        if plexpy.CONFIG.DO_NOT_OVERRIDE_GIT_BRANCH and plexpy.CONFIG.GIT_BRANCH:
+        if _get_config().DO_NOT_OVERRIDE_GIT_BRANCH and _get_config().GIT_BRANCH:
             remote_name = None
-            branch_name = plexpy.CONFIG.GIT_BRANCH
+            branch_name = _get_config().GIT_BRANCH
 
         else:
             remote_branch, err = runGit('rev-parse --abbrev-ref --symbolic-full-name @{u}')
@@ -92,16 +100,16 @@ def get_version():
             else:
                 remote_name = branch_name = None
 
-            if not remote_name and plexpy.CONFIG.GIT_REMOTE:
-                logger.error('Could not retrieve remote name from git. Falling back to %s.' % plexpy.CONFIG.GIT_REMOTE)
-                remote_name = plexpy.CONFIG.GIT_REMOTE
+            if not remote_name and _get_config().GIT_REMOTE:
+                logger.error('Could not retrieve remote name from git. Falling back to %s.' % _get_config().GIT_REMOTE)
+                remote_name = _get_config().GIT_REMOTE
             if not remote_name:
                 logger.error('Could not retrieve remote name from git. Defaulting to origin.')
                 branch_name = 'origin'
 
-            if not branch_name and plexpy.CONFIG.GIT_BRANCH:
-                logger.error('Could not retrieve branch name from git. Falling back to %s.' % plexpy.CONFIG.GIT_BRANCH)
-                branch_name = plexpy.CONFIG.GIT_BRANCH
+            if not branch_name and _get_config().GIT_BRANCH:
+                logger.error('Could not retrieve branch name from git. Falling back to %s.' % _get_config().GIT_BRANCH)
+                branch_name = _get_config().GIT_BRANCH
             if not branch_name:
                 logger.error('Could not retrieve branch name from git. Defaulting to master.')
                 branch_name = 'master'
@@ -156,8 +164,8 @@ def check_update(scheduler=False, notify=False, use_cache=False):
 def check_github(scheduler=False, notify=False, use_cache=False):
     plexpy.COMMITS_BEHIND = 0
 
-    if plexpy.CONFIG.GIT_TOKEN:
-        headers = {'Authorization': 'token {}'.format(plexpy.CONFIG.GIT_TOKEN)}
+    if _get_config().GIT_TOKEN:
+        headers = {'Authorization': 'token {}'.format(_get_config().GIT_TOKEN)}
     else:
         headers = {}
 
@@ -165,9 +173,9 @@ def check_github(scheduler=False, notify=False, use_cache=False):
     if not version:
         # Get the latest version available from github
         logger.info('Retrieving latest version information from GitHub')
-        url = 'https://api.github.com/repos/%s/%s/commits/%s' % (plexpy.CONFIG.GIT_USER,
-                                                                 plexpy.CONFIG.GIT_REPO,
-                                                                 plexpy.CONFIG.GIT_BRANCH)
+        url = 'https://api.github.com/repos/%s/%s/commits/%s' % (_get_config().GIT_USER,
+                                                                 _get_config().GIT_REPO,
+                                                                 _get_config().GIT_BRANCH)
         version = request.request_json(url, headers=headers, timeout=20,
                                        validator=lambda x: type(x) == dict)
         github_cache('version', github_data=version)
@@ -192,8 +200,8 @@ def check_github(scheduler=False, notify=False, use_cache=False):
     if not commits:
         logger.info('Comparing currently installed version with latest GitHub version')
         # Need to compare CURRENT << LATEST to get a list of commits
-        url = 'https://api.github.com/repos/%s/%s/compare/%s...%s' % (plexpy.CONFIG.GIT_USER,
-                                                                      plexpy.CONFIG.GIT_REPO,
+        url = 'https://api.github.com/repos/%s/%s/compare/%s...%s' % (_get_config().GIT_USER,
+                                                                      _get_config().GIT_REPO,
                                                                       plexpy.CURRENT_VERSION,
                                                                       plexpy.LATEST_VERSION)
         commits = request.request_json(url, headers=headers, timeout=20, whitelist_status_code=404,
@@ -209,7 +217,7 @@ def check_github(scheduler=False, notify=False, use_cache=False):
         logger.debug("In total, %d commits behind", ahead_by)
 
         # Do not count [skip ci] commits for Docker or Snap on the nightly branch
-        if plexpy.DOCKER and plexpy.CONFIG.GIT_BRANCH == 'nightly':
+        if plexpy.DOCKER and _get_config().GIT_BRANCH == 'nightly':
             for commit in reversed(commits['commits']):
                 if '[skip ci]' not in commit['commit']['message']:
                     plexpy.LATEST_VERSION = commit['sha']
@@ -227,8 +235,8 @@ def check_github(scheduler=False, notify=False, use_cache=False):
 
         releases = github_cache('releases', use_cache=use_cache)
         if not releases:
-            url = 'https://api.github.com/repos/%s/%s/releases' % (plexpy.CONFIG.GIT_USER,
-                                                                   plexpy.CONFIG.GIT_REPO)
+            url = 'https://api.github.com/repos/%s/%s/releases' % (_get_config().GIT_USER,
+                                                                   _get_config().GIT_REPO)
             releases = request.request_json(url, timeout=20, whitelist_status_code=404,
                                             validator=lambda x: type(x) == list)
             github_cache('releases', github_data=releases)
@@ -237,18 +245,18 @@ def check_github(scheduler=False, notify=False, use_cache=False):
             logger.warn('Could not get releases from GitHub.')
             return plexpy.LATEST_VERSION
 
-        if plexpy.CONFIG.GIT_BRANCH == 'master':
+        if _get_config().GIT_BRANCH == 'master':
             release = next((r for r in releases if not r['prerelease']), releases[0])
-        elif plexpy.CONFIG.GIT_BRANCH == 'beta':
+        elif _get_config().GIT_BRANCH == 'beta':
             release = next((r for r in releases if not r['tag_name'].endswith('-nightly')), releases[0])
-        elif plexpy.CONFIG.GIT_BRANCH == 'nightly':
+        elif _get_config().GIT_BRANCH == 'nightly':
             release = next((r for r in releases), releases[0])
         else:
             release = releases[0]
 
         plexpy.LATEST_RELEASE = release['tag_name']
 
-        if plexpy.CONFIG.GIT_BRANCH in ('master', 'beta') and release['target_commitish'] == plexpy.CURRENT_VERSION:
+        if _get_config().GIT_BRANCH in ('master', 'beta') and release['target_commitish'] == plexpy.CURRENT_VERSION:
             logger.info('Tautulli is up to date')
             return plexpy.CURRENT_VERSION
 
@@ -258,7 +266,7 @@ def check_github(scheduler=False, notify=False, use_cache=False):
                                      'plexpy_update_commit': plexpy.LATEST_VERSION,
                                      'plexpy_update_behind': plexpy.COMMITS_BEHIND})
 
-        if scheduler and plexpy.CONFIG.PLEXPY_AUTO_UPDATE and not plexpy.DOCKER:
+        if scheduler and _get_config().PLEXPY_AUTO_UPDATE and not plexpy.DOCKER:
             logger.info('Running automatic update.')
             plexpy.shutdown(restart=True, update=True)
 
@@ -276,8 +284,8 @@ def update():
         return
 
     elif plexpy.INSTALL_TYPE == 'git':
-        output, err = runGit('pull --ff-only {} {}'.format(plexpy.CONFIG.GIT_REMOTE,
-                                                           plexpy.CONFIG.GIT_BRANCH))
+        output, err = runGit('pull --ff-only {} {}'.format(_get_config().GIT_REMOTE,
+                                                           _get_config().GIT_BRANCH))
 
         if not output:
             logger.error('Unable to download latest version')
@@ -294,9 +302,9 @@ def update():
         clean_pyc()
 
     elif plexpy.INSTALL_TYPE == 'source':
-        tar_download_url = 'https://github.com/{}/{}/tarball/{}'.format(plexpy.CONFIG.GIT_USER,
-                                                                        plexpy.CONFIG.GIT_REPO,
-                                                                        plexpy.CONFIG.GIT_BRANCH)
+        tar_download_url = 'https://github.com/{}/{}/tarball/{}'.format(_get_config().GIT_USER,
+                                                                        _get_config().GIT_REPO,
+                                                                        _get_config().GIT_BRANCH)
         update_dir = os.path.join(plexpy.DATA_DIR, 'update')
         version_path = os.path.join(plexpy.PROG_DIR, 'version.txt')
 
@@ -307,7 +315,7 @@ def update():
             logger.error("Unable to retrieve new version from '%s', can't update", tar_download_url)
             return
 
-        download_name = plexpy.CONFIG.GIT_BRANCH + '-github'
+        download_name = _get_config().GIT_BRANCH + '-github'
         tar_download_path = os.path.join(plexpy.DATA_DIR, download_name)
 
         # Save tar to disk
@@ -358,17 +366,17 @@ def update():
 
 def reset_git_install():
     if plexpy.INSTALL_TYPE == 'git':
-        logger.info('Attempting to reset git install to "{}/{}/{}"'.format(plexpy.CONFIG.GIT_REMOTE,
-                                                                           plexpy.CONFIG.GIT_BRANCH,
+        logger.info('Attempting to reset git install to "{}/{}/{}"'.format(_get_config().GIT_REMOTE,
+                                                                           _get_config().GIT_BRANCH,
                                                                            common.RELEASE))
 
-        output, err = runGit('remote set-url {} https://github.com/{}/{}.git'.format(plexpy.CONFIG.GIT_REMOTE,
-                                                                                     plexpy.CONFIG.GIT_USER,
-                                                                                     plexpy.CONFIG.GIT_REPO))
-        output, err = runGit('fetch {}'.format(plexpy.CONFIG.GIT_REMOTE))
-        output, err = runGit('checkout {}'.format(plexpy.CONFIG.GIT_BRANCH))
-        output, err = runGit('branch -u {}/{}'.format(plexpy.CONFIG.GIT_REMOTE,
-                                                      plexpy.CONFIG.GIT_BRANCH))
+        output, err = runGit('remote set-url {} https://github.com/{}/{}.git'.format(_get_config().GIT_REMOTE,
+                                                                                     _get_config().GIT_USER,
+                                                                                     _get_config().GIT_REPO))
+        output, err = runGit('fetch {}'.format(_get_config().GIT_REMOTE))
+        output, err = runGit('checkout {}'.format(_get_config().GIT_BRANCH))
+        output, err = runGit('branch -u {}/{}'.format(_get_config().GIT_REMOTE,
+                                                      _get_config().GIT_BRANCH))
         output, err = runGit('reset --hard {}'.format(common.RELEASE))
         _, _ = runGit('clean -fd')
 
@@ -387,11 +395,11 @@ def reset_git_install():
 
 def checkout_git_branch():
     if plexpy.INSTALL_TYPE == 'git':
-        logger.info('Attempting to checkout git branch "{}/{}"'.format(plexpy.CONFIG.GIT_REMOTE,
-                                                                       plexpy.CONFIG.GIT_BRANCH))
+        logger.info('Attempting to checkout git branch "{}/{}"'.format(_get_config().GIT_REMOTE,
+                                                                       _get_config().GIT_BRANCH))
 
-        output, err = runGit('fetch {}'.format(plexpy.CONFIG.GIT_REMOTE))
-        output, err = runGit('checkout {}'.format(plexpy.CONFIG.GIT_BRANCH))
+        output, err = runGit('fetch {}'.format(_get_config().GIT_REMOTE))
+        output, err = runGit('checkout {}'.format(_get_config().GIT_BRANCH))
 
         if not output:
             logger.error('Unable to change git branch.')
@@ -402,13 +410,13 @@ def checkout_git_branch():
                 logger.error('Unable to checkout from git: ' + line)
                 return
 
-        output, err = runGit('pull {} {}'.format(plexpy.CONFIG.GIT_REMOTE,
-                                                 plexpy.CONFIG.GIT_BRANCH))
+        output, err = runGit('pull {} {}'.format(_get_config().GIT_REMOTE,
+                                                 _get_config().GIT_BRANCH))
 
 
 def github_cache(cache, github_data=None, use_cache=True):
     timestamp = helpers.timestamp()
-    cache_filepath = os.path.join(plexpy.CONFIG.CACHE_DIR, 'github_{}.json'.format(cache))
+    cache_filepath = os.path.join(_get_config().CACHE_DIR, 'github_{}.json'.format(cache))
 
     if github_data:
         cache_data = {'github_data': github_data,
@@ -426,7 +434,7 @@ def github_cache(cache, github_data=None, use_cache=True):
             with open(cache_filepath, 'r', encoding='utf-8') as cache_file:
                 cache_data = json.load(cache_file)
             if (
-                timestamp - cache_data['_cache_time'] < plexpy.CONFIG.CHECK_GITHUB_CACHE_SECONDS and
+                timestamp - cache_data['_cache_time'] < _get_config().CHECK_GITHUB_CACHE_SECONDS and
                 cache_data['_release_version'] == common.RELEASE
             ):
                 logger.debug('Using cached GitHub %s data', cache)

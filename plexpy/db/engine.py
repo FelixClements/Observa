@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, URL
 
 import plexpy
+from plexpy.config import get_config
 
 
 _ENGINE: Optional[Engine] = None
@@ -16,9 +17,17 @@ def _as_int(value):
         return None
 
 
+def _get_config():
+    """Get config - prefers injected dependency, falls back to plexpy.CONFIG."""
+    try:
+        return get_config()
+    except RuntimeError:
+        return plexpy.CONFIG
+
+
 def build_database_url(config=None):
     if config is None:
-        config = plexpy.CONFIG
+        config = _get_config()
 
     query = {}
     sslmode = getattr(config, 'DB_SSLMODE', None)
@@ -38,7 +47,7 @@ def build_database_url(config=None):
 
 def create_engine_from_config(config=None):
     if config is None:
-        config = plexpy.CONFIG
+        config = _get_config()
 
     url = build_database_url(config=config)
     pool_size = _as_int(getattr(config, 'DB_POOL_SIZE', None)) or 5

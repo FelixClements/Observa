@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -32,6 +32,11 @@ from plexpy.services import activity_handler
 from plexpy.services import activity_pinger
 from plexpy.services import activity_processor
 from plexpy.util import logger
+from plexpy.web.dependencies import get_config
+
+
+def _get_config():
+    return get_config()
 
 
 name = 'websocket'
@@ -80,7 +85,7 @@ def on_connect():
             on_intup()
 
     plexpy.initialize_scheduler()
-    if plexpy.CONFIG.WEBSOCKET_MONITOR_PING_PONG:
+    if _get_config().WEBSOCKET_MONITOR_PING_PONG:
         send_ping()
 
 
@@ -93,9 +98,9 @@ def on_disconnect():
         plexpy.PLEX_SERVER_UP = False
 
         logger.debug("Tautulli WebSocket :: Scheduling Plex server down callback in %d seconds.",
-                     plexpy.CONFIG.NOTIFY_SERVER_CONNECTION_THRESHOLD)
+                     _get_config().NOTIFY_SERVER_CONNECTION_THRESHOLD)
         activity_handler.schedule_callback('on_intdown', func=on_intdown,
-                                           seconds=plexpy.CONFIG.NOTIFY_SERVER_CONNECTION_THRESHOLD)
+                                           seconds=_get_config().NOTIFY_SERVER_CONNECTION_THRESHOLD)
 
     activity_processor.ActivityProcessor().set_temp_stopped()
     plexpy.initialize_scheduler()
@@ -145,7 +150,7 @@ def wait_pong():
 
     logger.warn("Tautulli WebSocket :: Failed to receive pong from websocket, ping attempt %s." % str(pong_count))
 
-    if pong_count >= plexpy.CONFIG.WEBSOCKET_CONNECTION_ATTEMPTS:
+    if pong_count >= _get_config().WEBSOCKET_CONNECTION_ATTEMPTS:
         pong_count = 0
         close()
 
@@ -162,28 +167,28 @@ def receive_pong():
 def run():
     from websocket import create_connection
 
-    if plexpy.CONFIG.PMS_SSL and plexpy.CONFIG.PMS_URL[:5] == 'https':
-        uri = plexpy.CONFIG.PMS_URL.replace('https://', 'wss://') + '/:/websockets/notifications'
+    if _get_config().PMS_SSL and _get_config().PMS_URL[:5] == 'https':
+        uri = _get_config().PMS_URL.replace('https://', 'wss://') + '/:/websockets/notifications'
         secure = 'secure '
-        if plexpy.CONFIG.VERIFY_SSL_CERT:
+        if _get_config().VERIFY_SSL_CERT:
             sslopt = {'ca_certs': certifi.where()}
         else:
             sslopt = {'cert_reqs': ssl.CERT_NONE}
     else:
         uri = 'ws://%s:%s/:/websockets/notifications' % (
-            plexpy.CONFIG.PMS_IP,
-            plexpy.CONFIG.PMS_PORT
+            _get_config().PMS_IP,
+            _get_config().PMS_PORT
         )
         secure = ''
         sslopt = None
 
     # Set authentication token (if one is available)
-    if plexpy.CONFIG.PMS_TOKEN:
-        header = {"X-Plex-Token": plexpy.CONFIG.PMS_TOKEN}
+    if _get_config().PMS_TOKEN:
+        header = {"X-Plex-Token": _get_config().PMS_TOKEN}
     else:
         header = None
 
-    timeout = plexpy.CONFIG.PMS_TIMEOUT
+    timeout = _get_config().PMS_TIMEOUT
 
     global ws_shutdown
     ws_shutdown = False
@@ -215,12 +220,12 @@ def run():
             if reconnects == 0:
                 logger.warn("Tautulli WebSocket :: Connection has closed.")
 
-            if not plexpy.CONFIG.PMS_IS_CLOUD and reconnects < plexpy.CONFIG.WEBSOCKET_CONNECTION_ATTEMPTS:
+            if not _get_config().PMS_IS_CLOUD and reconnects < _get_config().WEBSOCKET_CONNECTION_ATTEMPTS:
                 reconnects += 1
 
                 # Sleep 5 between connection attempts
                 if reconnects > 1:
-                    time.sleep(plexpy.CONFIG.WEBSOCKET_CONNECTION_TIMEOUT)
+                    time.sleep(_get_config().WEBSOCKET_CONNECTION_TIMEOUT)
 
                 logger.warn("Tautulli WebSocket :: Reconnection attempt %s." % str(reconnects))
 

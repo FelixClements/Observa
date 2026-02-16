@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 import plexpy
+from plexpy.config import get_config
 from plexpy.util import helpers
 from plexpy.util import logger
 
@@ -23,9 +24,17 @@ def _pg_restore_path():
     return shutil.which('pg_restore')
 
 
+def _get_config():
+    """Get config - prefers injected dependency, falls back to plexpy.CONFIG."""
+    try:
+        return get_config()
+    except RuntimeError:
+        return plexpy.CONFIG
+
+
 def _build_pg_dump_command(output_path, config=None):
     if config is None:
-        config = plexpy.CONFIG
+        config = _get_config()
 
     cmd = [
         _pg_dump_path(),
@@ -53,7 +62,7 @@ def _build_pg_dump_command(output_path, config=None):
 
 def _build_pg_restore_command(backup_path, config=None):
     if config is None:
-        config = plexpy.CONFIG
+        config = _get_config()
 
     cmd = [
         _pg_restore_path(),
@@ -83,7 +92,7 @@ def _build_pg_restore_command(backup_path, config=None):
 
 def _build_pg_dump_env(config=None):
     if config is None:
-        config = plexpy.CONFIG
+        config = _get_config()
 
     env = os.environ.copy()
     password = getattr(config, 'DB_PASSWORD', None)
@@ -132,11 +141,12 @@ def has_recent_backup(backup_dir, max_age_seconds):
 
 
 def make_backup(cleanup=False, scheduler=False):
-    if not plexpy.CONFIG.BACKUP_DIR:
+    config = _get_config()
+    if not config.BACKUP_DIR:
         logger.error('Tautulli Database :: Backup directory is not configured.')
         return False
 
-    backup_folder = plexpy.CONFIG.BACKUP_DIR
+    backup_folder = config.BACKUP_DIR
     if not os.path.exists(backup_folder):
         os.makedirs(backup_folder)
 
@@ -153,11 +163,12 @@ def make_backup(cleanup=False, scheduler=False):
         return False
 
     if cleanup:
+        config = _get_config()
         now = time.time()
         for root, _, files in os.walk(backup_folder):
             dump_files = [os.path.join(root, f) for f in files if '.sched' in f and f.endswith(BACKUP_EXTENSION)]
             for file_ in dump_files:
-                if os.stat(file_).st_mtime < now - plexpy.CONFIG.BACKUP_DAYS * 86400:
+                if os.stat(file_).st_mtime < now - config.BACKUP_DAYS * 86400:
                     try:
                         os.remove(file_)
                     except OSError as exc:
@@ -172,11 +183,12 @@ def make_backup(cleanup=False, scheduler=False):
 
 
 def make_migration_backup():
-    if not plexpy.CONFIG.BACKUP_DIR:
+    config = _get_config()
+    if not config.BACKUP_DIR:
         logger.error('Tautulli Database :: Backup directory is not configured.')
         return None
 
-    backup_folder = plexpy.CONFIG.BACKUP_DIR
+    backup_folder = config.BACKUP_DIR
     if not os.path.exists(backup_folder):
         os.makedirs(backup_folder)
 

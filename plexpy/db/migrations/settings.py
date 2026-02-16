@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import configparser
 import os
 from typing import Optional, Tuple
 
-from configobj import ConfigObj
 from sqlalchemy.engine import URL
 
 
@@ -106,8 +106,13 @@ def _load_config_settings(config_path: str) -> Optional[DatabaseSettings]:
     if not config_path or not os.path.isfile(config_path):
         return None
 
-    config = ConfigObj(config_path, encoding='utf-8')
-    section = config.get('Database', {})
+    config = configparser.ConfigParser()
+    config.read(config_path, encoding='utf-8')
+
+    if not config.has_section('Database'):
+        return None
+
+    section = dict(config.items('Database'))
 
     return _settings_from_values(
         host=section.get('db_host'),

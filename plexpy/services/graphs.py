@@ -22,6 +22,7 @@ from sqlalchemy import Integer, and_, case, cast, distinct, func, or_, select
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.services import libraries
 from plexpy.web import session
 from plexpy.db import queries
@@ -32,13 +33,20 @@ from plexpy.util import helpers
 from plexpy.util import logger
 
 
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return _get_config()
+
+
 class Graphs(object):
 
     def __init__(self):
         pass
 
     def _timezone_name(self):
-        timezone = plexpy.SYS_TIMEZONE or 'UTC'
+        timezone = _get_config().SYS_TIMEZONE or 'UTC'
         tz_name = getattr(timezone, 'zone', None) or str(timezone)
         return tz_name.replace("'", "''")
 
@@ -77,7 +85,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -206,7 +214,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -283,7 +291,7 @@ class Graphs(object):
 
         result_by_dayofweek = {item['dayofweek']: item for item in result}
 
-        if plexpy.CONFIG.WEEK_START_MONDAY:
+        if _get_config().WEEK_START_MONDAY:
             days_list = ['Monday', 'Tuesday', 'Wednesday',
                          'Thursday', 'Friday', 'Saturday', 'Sunday']
         else:
@@ -340,7 +348,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -462,7 +470,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         datestring_expr = self._local_month_expr()
@@ -592,7 +600,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -706,7 +714,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -831,7 +839,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -1030,7 +1038,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -1123,7 +1131,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -1235,7 +1243,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()
@@ -1326,7 +1334,7 @@ class Graphs(object):
         user_filters = self._make_user_cond(user_id)
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _get_config().GROUP_HISTORY_TABLES
 
         group_key = self._group_key_expr(grouping)
         duration_expr = self._duration_expr()

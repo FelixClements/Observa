@@ -19,12 +19,23 @@ import collections
 from xml.dom import minidom
 
 from bs4 import BeautifulSoup
-import requests
-from requests.packages import urllib3
+from plexpy.util import http as requests_module
+from plexpy.util import http
+
+requests = requests_module
+urllib3 = http.urllib3
 
 import plexpy
+from plexpy.config import get_config
 from plexpy.util import lock
 from plexpy.util import logger
+
+
+def _get_config():
+    try:
+        return get_config()
+    except RuntimeError:
+        return plexpy.CONFIG
 
 
 # Dictionary with last request times, for rate limiting.
@@ -52,7 +63,7 @@ def request_response(url, method="get", auto_raise=True,
 
     # Disable verification of SSL certificates if requested. Note: this could
     # pose a security issue!
-    kwargs["verify"] = bool(plexpy.CONFIG.VERIFY_SSL_CERT)
+    kwargs["verify"] = bool(_get_config().VERIFY_SSL_CERT)
     if not kwargs['verify']:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -144,7 +155,7 @@ def request_response2(url, method="get", auto_raise=True,
 
     # Disable verification of SSL certificates if requested. Note: this could
     # pose a security issue!
-    kwargs['verify'] = bool(plexpy.CONFIG.VERIFY_SSL_CERT)
+    kwargs['verify'] = bool(_get_config().VERIFY_SSL_CERT)
     if not kwargs['verify']:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
