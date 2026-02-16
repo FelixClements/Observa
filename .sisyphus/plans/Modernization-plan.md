@@ -87,7 +87,7 @@
 - [x] `future==1.0.0` in `requirements.txt` (line 15) ✅ DONE
 - [x] `from future.moves.itertools import islice, zip_longest` in `plexpy/util/helpers.py` (line 28) ✅ DONE
 - [x] `from IPy import IP` in `plexpy/util/helpers.py` (line 33) ✅ DONE
-- [x] `from __future__ import annotations` in 8 files: ⏭️ SKIPPED (harmless in Python 3.12+)
+- [x] `from __future__ import annotations` in 8 files ✅ DONE (Feb 16, 2026)
 
 #### Outdated Libraries (REPLACE)
 - [x] `configobj==5.0.9` → configparser (stdlib) ✅ DONE (Feb 15, 2026)
