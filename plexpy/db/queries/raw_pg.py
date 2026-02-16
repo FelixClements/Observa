@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 from sqlalchemy import text
