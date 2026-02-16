@@ -147,6 +147,8 @@
 - [x] Extended SessionHistoryRepository with aggregation methods ✅ DONE
 - [x] Extended NotifyLogRepository with filter/delete methods ✅ DONE
 - [x] Extended NewsletterLogRepository with filter/delete methods ✅ DONE
+- [x] Added datatable_query support to NotifyLogRepository ✅ DONE (Feb 16, 2026)
+- [x] Added deprecation warnings to database.py ✅ DONE (Feb 16, 2026)
 - [ ] `plexpy/db/datatables.py` → Use existing Repository.datatable_query()
 - [ ] `plexpy/db/datafactory.py` → Migrate complex aggregation queries to repositories
 - [ ] `plexpy/db/database.py` → Advanced Alchemy
