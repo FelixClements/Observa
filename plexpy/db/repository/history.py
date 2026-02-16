@@ -4,11 +4,48 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.orm import selectinload
 
 from plexpy.db.models import SessionHistory, SessionHistoryMediaInfo, SessionHistoryMetadata
-from plexpy.db.repository.base import Repository
+from plexpy.db.repository.base import Repository, DataTableParams, DataTableResponse
 
 
 class SessionHistoryRepository(Repository[SessionHistory]):
     model = SessionHistory
+
+    # Searchable columns for datatable queries
+    _SEARCHABLE_COLUMNS = [
+        SessionHistory.user,
+        SessionHistory.player,
+        SessionHistory.product,
+        SessionHistory.platform,
+        SessionHistory.media_type,
+        SessionHistory.ip_address,
+        SessionHistory.machine_id,
+    ]
+
+    # Orderable columns for datatable queries
+    _ORDERABLE_COLUMNS = {
+        'id': SessionHistory.id,
+        'reference_id': SessionHistory.reference_id,
+        'started': SessionHistory.started,
+        'stopped': SessionHistory.stopped,
+        'rating_key': SessionHistory.rating_key,
+        'user_id': SessionHistory.user_id,
+        'user': SessionHistory.user,
+        'ip_address': SessionHistory.ip_address,
+        'paused_counter': SessionHistory.paused_counter,
+        'player': SessionHistory.player,
+        'product': SessionHistory.product,
+        'product_version': SessionHistory.product_version,
+        'platform': SessionHistory.platform,
+        'platform_version': SessionHistory.platform_version,
+        'profile': SessionHistory.profile,
+        'machine_id': SessionHistory.machine_id,
+        'bandwidth': SessionHistory.bandwidth,
+        'location': SessionHistory.location,
+        'quality_profile': SessionHistory.quality_profile,
+        'media_type': SessionHistory.media_type,
+        'section_id': SessionHistory.section_id,
+        'view_offset': SessionHistory.view_offset,
+    }
 
     def get_by_reference_id(self, reference_id: int) -> Optional[SessionHistory]:
         stmt = select(SessionHistory).where(SessionHistory.reference_id == reference_id)
@@ -102,6 +139,38 @@ class SessionHistoryRepository(Repository[SessionHistory]):
         stmt = select(SessionHistory.platform).distinct().where(SessionHistory.platform.isnot(None))
         result = self.session.execute(stmt).scalars().all()
         return result
+
+    def datatable_query(
+        self,
+        params: DataTableParams,
+        searchable_columns: list = None,
+        orderable_columns: dict = None,
+        formatter=None,
+        extra_filters: list = None,
+    ) -> DataTableResponse:
+        """
+        Execute a datatable query with search, sort, and pagination.
+
+        This method provides the same functionality as the legacy datatables.py
+        but uses the repository pattern with SQLAlchemy ORM.
+
+        Args:
+            params: DataTableParams with draw, start, length, search, order, columns
+            searchable_columns: Columns to search (optional, uses default)
+            orderable_columns: Columns to sort by (optional, uses default)
+            formatter: Custom row formatter (optional)
+            extra_filters: Additional SQLAlchemy filters (optional)
+
+        Returns:
+            DataTableResponse with recordsTotal, recordsFiltered, data, draw
+        """
+        return super().datatable_query(
+            params=params,
+            searchable_columns=searchable_columns or self._SEARCHABLE_COLUMNS,
+            orderable_columns=orderable_columns or self._ORDERABLE_COLUMNS,
+            formatter=formatter,
+            extra_filters=extra_filters,
+        )
 
 
 class SessionHistoryMetadataRepository(Repository[SessionHistoryMetadata]):
