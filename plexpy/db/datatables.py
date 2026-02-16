@@ -1,4 +1,4 @@
-﻿# This file is part of Tautulli.
+# This file is part of Tautulli.
 #
 #  Tautulli is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,12 +16,39 @@
 """
 Raw SQL helpers for legacy DataTables server-side queries.
 
+DEPRECATED: This module is deprecated. Use repository classes instead.
+
 This module intentionally builds SQL strings for complex, pre-existing
 Datatables endpoints. Callers must supply trusted column/table expressions.
 Values are always bound as parameters to avoid injection.
+
+Migration guide:
+- Use plexpy.db.repository.history.SessionHistoryRepository.datatable_query()
+  for history queries
+- Use plexpy.db.repository.users.UserRepository.datatable_query() for user queries
+- Use plexpy.db.repository.sessions.SessionRepository.datatable_query() for session queries
+- Use plexpy.db.repository.libraries.LibrarySectionRepository.datatable_query()
+  for library queries
+
+Example migration:
+    # Old (deprecated):
+    from plexpy.db import datatables
+    dt = datatables.DataTables()
+    result = dt.ssp_query(table_name='session_history', ...)
+
+    # New (recommended):
+    from plexpy.db.repository.history import SessionHistoryRepository
+    from plexpy.db.repository.base import DataTableParams
+    from plexpy.db.session import session_scope
+
+    with session_scope() as db_session:
+        repo = SessionHistoryRepository(session=db_session)
+        params = DataTableParams(draw=1, start=0, length=25)
+        result = repo.datatable_query(params)
 """
 
 import re
+import warnings
 
 import plexpy
 from sqlalchemy import text
@@ -33,10 +60,18 @@ from plexpy.util import logger
 
 class DataTables(object):
     """
-    Server side processing for Datatables
+    DEPRECATED: Server side processing for Datatables.
+
+    Use repository classes instead - see module docstring for migration guide.
     """
 
+    _DEPRECATION_WARNING = (
+        "DataTables class is deprecated. Use repository classes instead. "
+        "See plexpy.db.repository for available repositories."
+    )
+
     def __init__(self):
+        warnings.warn(self._DEPRECATION_WARNING, DeprecationWarning, stacklevel=2)
         self.engine = get_engine()
 
     def _bind_params(self, query, args):
