@@ -145,6 +145,10 @@
   - `plexpy/db/repository/mobile.py` - MobileDevice
   - `plexpy/db/repository/lookups.py` - 6 lookup models
 - [x] Extended SessionHistoryRepository with aggregation methods ✅ DONE
+- [x] Added datatable_query support to SessionHistoryRepository ✅ DONE (Feb 16, 2026)
+- [x] Added datatable_query support to UsersRepository ✅ DONE (Feb 16, 2026)
+- [x] Added datatable_query support to SessionsRepository ✅ DONE (Feb 16, 2026)
+- [x] Added datatable_query support to LibrariesRepository ✅ DONE (Feb 16, 2026)
 - [x] Extended NotifyLogRepository with filter/delete methods ✅ DONE
 - [x] Extended NewsletterLogRepository with filter/delete methods ✅ DONE
 - [x] Added datatable_query support to NotifyLogRepository ✅ DONE (Feb 16, 2026)
