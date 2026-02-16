@@ -30,6 +30,8 @@ from plexpy.db import cleanup
 from plexpy.db import queries
 from plexpy.db.engine import get_engine
 from plexpy.db.models import SessionHistory, SessionHistoryMediaInfo, SessionHistoryMetadata, User, UserLogin
+from plexpy.db.repository.users import UserLoginRepository
+from plexpy.db.repository.base import DataTableParams
 from plexpy.db.session import session_scope
 from plexpy.services import libraries
 from plexpy.web import session
@@ -1088,79 +1090,71 @@ class Users(object):
         if not session.allow_session_user(user_id):
             return default_return
 
-        data_tables = datatables.DataTables()
-
-        if session.get_session_user_id():
-            custom_where = [['user_login.user_id', session.get_session_user_id()]]
-        else:
-            custom_where = [['user_login.user_id', user_id]] if user_id else []
-
-        columns = ["user_login.id AS row_id",
-                   "user_login.timestamp",
-                   "user_login.user_id",
-                   "user_login.user",
-                   "user_login.user_group",
-                   "user_login.ip_address",
-                   "user_login.host",
-                   "user_login.user_agent",
-                   "user_login.success",
-                   "user_login.expiry",
-                   "user_login.jwt_token",
-                   "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
-                    THEN users.username ELSE users.friendly_name END) AS friendly_name"
-                   ]
-
-        try:
-            query = data_tables.ssp_query(table_name='user_login',
-                                          columns=columns,
-                                          custom_where=custom_where,
-                                          group_by=[],
-                                          join_types=['LEFT OUTER JOIN'],
-                                          join_tables=['users'],
-                                          join_evals=[['user_login.user_id', 'users.user_id']],
-                                          kwargs=kwargs)
-        except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_datatables_user_login: %s." % e)
+        # Parse kwargs into DataTableParams
+        json_data = helpers.process_json_kwargs(json_kwargs=kwargs.get('json_data')) if kwargs else None
+        if not json_data:
             return default_return
 
-        results = query['result']
+        # Build extra filters for user_id
+        extra_filters = []
+        filter_user_id = session.get_session_user_id() or user_id
+        if filter_user_id:
+            extra_filters.append(UserLogin.user_id == int(filter_user_id))
 
-        rows = []
-        for item in results:
-            (os, browser) = httpagentparser.simple_detect(item['user_agent'])
+        def formatter(item):
+            """Format user login record with post-processing."""
+            (os, browser) = httpagentparser.simple_detect(item.get('user_agent', ''))
 
             expiry = None
             current = False
-            if item['jwt_token'] and item['expiry']:
+            if item.get('jwt_token') and item.get('expiry'):
                 _expiry = helpers.iso_to_datetime(item['expiry'])
                 if _expiry > arrow.now():
                     expiry = _expiry.strftime('%Y-%m-%d %H:%M:%S')
-                current = (item['jwt_token'] == jwt_token)
+                current = (item.get('jwt_token') == jwt_token)
 
-            row = {'row_id': item['row_id'],
-                   'timestamp': item['timestamp'],
-                   'user_id': item['user_id'],
-                   'user_group': item['user_group'],
-                   'ip_address': item['ip_address'],
-                   'host': item['host'],
-                   'user_agent': item['user_agent'],
-                   'os': os,
-                   'browser': browser,
-                   'success': item['success'],
-                   'expiry': expiry,
-                   'current': current,
-                   'friendly_name': item['friendly_name'] or item['user']
-                   }
+            return {
+                'row_id': item.get('id'),
+                'timestamp': item.get('timestamp'),
+                'user_id': item.get('user_id'),
+                'user_group': item.get('user_group'),
+                'ip_address': item.get('ip_address'),
+                'host': item.get('host'),
+                'user_agent': item.get('user_agent'),
+                'os': os,
+                'browser': browser,
+                'success': item.get('success'),
+                'expiry': expiry,
+                'current': current,
+                'friendly_name': item.get('friendly_name') or item.get('user')
+            }
 
-            rows.append(row)
+        try:
+            with session_scope() as db_session:
+                repo = UserLoginRepository(session=db_session)
+                params = DataTableParams(
+                    draw=json_data.get('draw', 1),
+                    start=json_data.get('start', 0),
+                    length=json_data.get('length', 25),
+                    search=json_data.get('search', {}).get('value'),
+                    order=json_data.get('order', []),
+                    columns=json_data.get('columns', [])
+                )
+                result = repo.datatable_query(
+                    params=params,
+                    formatter=formatter,
+                    extra_filters=extra_filters
+                )
 
-        dict = {'recordsFiltered': query['filteredCount'],
-                'recordsTotal': query['totalCount'],
-                'data': session.friendly_name_to_username(rows),
-                'draw': query['draw']
+                return {
+                    'recordsFiltered': result.recordsFiltered,
+                    'recordsTotal': result.recordsTotal,
+                    'data': session.friendly_name_to_username(result.data),
+                    'draw': result.draw
                 }
-
-        return dict
+        except Exception as e:
+            logger.warn("Tautulli Users :: Unable to execute database query for get_datatables_user_login: %s." % e)
+            return default_return
 
     def delete_login_log(self):
         try:
