@@ -1892,7 +1892,7 @@ class DataFactory(object):
             return []
 
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _config().GROUP_HISTORY_TABLES
 
         if query_days and query_days is not None:
             query_days = map(helpers.cast_to_int, str(query_days).split(','))
@@ -1979,7 +1979,7 @@ class DataFactory(object):
 
     def get_user_stats(self, rating_key=None, guid=None, media_type=None, grouping=None):
         if grouping is None:
-            grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
+            grouping = _config().GROUP_HISTORY_TABLES
         user_stats = []
 
         section_ids = set()

@@ -36,8 +36,14 @@ import plexpy
 from plexpy.app import bootstrap as _bootstrap
 from plexpy.app import common
 from plexpy.config import core as config
+from plexpy.config import get_config
 from plexpy.util import helpers
 from plexpy.util import logger
+
+
+def _get_config():
+    """Get config - prefers injected dependency, falls back to plexpy.CONFIG for backward compatibility."""
+    return get_config() or plexpy.CONFIG
 from plexpy.web import webstart
 
 # Register signals, such as CTRL + C
@@ -272,18 +278,19 @@ def main():
     plexpy.start()
 
     # Force the http port if necessary
+    config = _get_config()
     if args.port:
         plexpy.HTTP_PORT = args.port
         logger.info('Using forced web server port: %i', plexpy.HTTP_PORT)
     else:
-        plexpy.HTTP_PORT = int(plexpy.CONFIG.HTTP_PORT)
+        plexpy.HTTP_PORT = int(config.HTTP_PORT)
 
     # Try to start the server. Will exit here is address is already in use.
     webstart.start()
 
     # Open webbrowser
-    if plexpy.CONFIG.LAUNCH_BROWSER and not args.nolaunch and not plexpy.DEV:
-        plexpy.launch_browser(plexpy.CONFIG.HTTP_HOST, plexpy.HTTP_PORT,
+    if config.LAUNCH_BROWSER and not args.nolaunch and not plexpy.DEV:
+        plexpy.launch_browser(config.HTTP_HOST, plexpy.HTTP_PORT,
                               plexpy.HTTP_ROOT)
 
     wait()

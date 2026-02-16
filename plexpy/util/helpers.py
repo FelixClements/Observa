@@ -47,9 +47,15 @@ import xmltodict
 
 import plexpy
 from plexpy.app import common
+from plexpy.config import get_config
 from plexpy.util import logger
 from plexpy.util import request
 from plexpy.web.api2 import API2
+
+
+def _get_config():
+    """Get config - prefers injected dependency, falls back to plexpy.CONFIG for backward compatibility."""
+    return get_config() or plexpy.CONFIG
 
 
 def addtoapi(*dargs, **dkwargs):
@@ -490,8 +496,9 @@ def create_https_certificates(ssl_cert, ssl_key):
     serial = timestamp()
     not_before = 0
     not_after = 60 * 60 * 24 * 365 * 10  # ten years
-    domains = ['DNS:' + d.strip() for d in plexpy.CONFIG.HTTPS_DOMAIN.split(',') if d]
-    ips = ['IP:' + d.strip() for d in plexpy.CONFIG.HTTPS_IP.split(',') if d]
+    config = _get_config()
+    domains = ['DNS:' + d.strip() for d in config.HTTPS_DOMAIN.split(',') if d]
+    ips = ['IP:' + d.strip() for d in config.HTTPS_IP.split(',') if d]
     alt_names = ','.join(domains + ips).encode('utf-8')
 
     # Create the self-signed Tautulli certificate
@@ -777,11 +784,12 @@ def anon_url(*url):
 
 
 def get_img_service(include_self=False):
-    if plexpy.CONFIG.NOTIFY_UPLOAD_POSTERS == 1:
+    config = _get_config()
+    if config.NOTIFY_UPLOAD_POSTERS == 1:
         return 'imgur'
-    elif plexpy.CONFIG.NOTIFY_UPLOAD_POSTERS == 2 and include_self:
+    elif config.NOTIFY_UPLOAD_POSTERS == 2 and include_self:
         return 'self-hosted'
-    elif plexpy.CONFIG.NOTIFY_UPLOAD_POSTERS == 3:
+    elif config.NOTIFY_UPLOAD_POSTERS == 3:
         return 'cloudinary'
     else:
         return None
@@ -789,13 +797,14 @@ def get_img_service(include_self=False):
 
 def upload_to_imgur(img_data, img_title='', rating_key='', fallback=''):
     """ Uploads an image to Imgur """
+    config = _get_config()
     img_url = delete_hash = ''
 
-    if not plexpy.CONFIG.IMGUR_CLIENT_ID:
+    if not config.IMGUR_CLIENT_ID:
         logger.error("Tautulli Helpers :: Cannot upload image to Imgur. No Imgur client id specified in the settings.")
         return img_url, delete_hash
 
-    headers = {'Authorization': 'Client-ID %s' % plexpy.CONFIG.IMGUR_CLIENT_ID}
+    headers = {'Authorization': 'Client-ID %s' % config.IMGUR_CLIENT_ID}
     data = {'image': base64.b64encode(img_data),
             'title': img_title.encode('utf-8'),
             'name': str(rating_key) + '.png',
@@ -823,11 +832,12 @@ def upload_to_imgur(img_data, img_title='', rating_key='', fallback=''):
 
 def delete_from_imgur(delete_hash, img_title='', fallback=''):
     """ Deletes an image from Imgur """
-    if not plexpy.CONFIG.IMGUR_CLIENT_ID:
+    config = _get_config()
+    if not config.IMGUR_CLIENT_ID:
         logger.error("Tautulli Helpers :: Cannot delete image from Imgur. No Imgur client id specified in the settings.")
         return False
 
-    headers = {'Authorization': 'Client-ID %s' % plexpy.CONFIG.IMGUR_CLIENT_ID}
+    headers = {'Authorization': 'Client-ID %s' % config.IMGUR_CLIENT_ID}
 
     response, err_msg, req_msg = request.request_response2('https://api.imgur.com/3/image/%s' % delete_hash, 'DELETE',
                                                            headers=headers)
@@ -845,16 +855,17 @@ def delete_from_imgur(delete_hash, img_title='', fallback=''):
 
 def upload_to_cloudinary(img_data, img_title='', rating_key='', fallback=''):
     """ Uploads an image to Cloudinary """
+    config = _get_config()
     img_url = ''
 
-    if not plexpy.CONFIG.CLOUDINARY_CLOUD_NAME or not plexpy.CONFIG.CLOUDINARY_API_KEY or not plexpy.CONFIG.CLOUDINARY_API_SECRET:
+    if not config.CLOUDINARY_CLOUD_NAME or not config.CLOUDINARY_API_KEY or not config.CLOUDINARY_API_SECRET:
         logger.error("Tautulli Helpers :: Cannot upload image to Cloudinary. Cloudinary settings not specified in the settings.")
         return img_url
 
     cloudinary.config(
-        cloud_name=plexpy.CONFIG.CLOUDINARY_CLOUD_NAME,
-        api_key=plexpy.CONFIG.CLOUDINARY_API_KEY,
-        api_secret=plexpy.CONFIG.CLOUDINARY_API_SECRET
+        cloud_name=config.CLOUDINARY_CLOUD_NAME,
+        api_key=config.CLOUDINARY_API_KEY,
+        api_secret=config.CLOUDINARY_API_SECRET
     )
 
     try:
@@ -872,14 +883,15 @@ def upload_to_cloudinary(img_data, img_title='', rating_key='', fallback=''):
 
 def delete_from_cloudinary(rating_key=None, delete_all=False):
     """ Deletes an image from Cloudinary """
-    if not plexpy.CONFIG.CLOUDINARY_CLOUD_NAME or not plexpy.CONFIG.CLOUDINARY_API_KEY or not plexpy.CONFIG.CLOUDINARY_API_SECRET:
+    config = _get_config()
+    if not config.CLOUDINARY_CLOUD_NAME or not config.CLOUDINARY_API_KEY or not config.CLOUDINARY_API_SECRET:
         logger.error("Tautulli Helpers :: Cannot delete image from Cloudinary. Cloudinary settings not specified in the settings.")
         return False
 
     cloudinary.config(
-        cloud_name=plexpy.CONFIG.CLOUDINARY_CLOUD_NAME,
-        api_key=plexpy.CONFIG.CLOUDINARY_API_KEY,
-        api_secret=plexpy.CONFIG.CLOUDINARY_API_SECRET
+        cloud_name=config.CLOUDINARY_CLOUD_NAME,
+        api_key=config.CLOUDINARY_API_KEY,
+        api_secret=config.CLOUDINARY_API_SECRET
     )
 
     if delete_all:
@@ -901,16 +913,17 @@ def delete_from_cloudinary(rating_key=None, delete_all=False):
 
 def cloudinary_transform(rating_key=None, width=1000, height=1500, opacity=100, background='000000', blur=0,
                          img_format='png', img_title='', fallback=None):
+    config = _get_config()
     url = ''
 
-    if not plexpy.CONFIG.CLOUDINARY_CLOUD_NAME or not plexpy.CONFIG.CLOUDINARY_API_KEY or not plexpy.CONFIG.CLOUDINARY_API_SECRET:
+    if not config.CLOUDINARY_CLOUD_NAME or not config.CLOUDINARY_API_KEY or not config.CLOUDINARY_API_SECRET:
         logger.error("Tautulli Helpers :: Cannot transform image on Cloudinary. Cloudinary settings not specified in the settings.")
         return url
 
     cloudinary.config(
-        cloud_name=plexpy.CONFIG.CLOUDINARY_CLOUD_NAME,
-        api_key=plexpy.CONFIG.CLOUDINARY_API_KEY,
-        api_secret=plexpy.CONFIG.CLOUDINARY_API_SECRET
+        cloud_name=config.CLOUDINARY_CLOUD_NAME,
+        api_key=config.CLOUDINARY_API_KEY,
+        api_secret=config.CLOUDINARY_API_SECRET
     )
 
     img_options = {'format': img_format,
@@ -1122,12 +1135,13 @@ def eval_logic_groups_to_bool(logic_groups, eval_conds):
 
 
 def get_plexpy_url(hostname=None):
-    if plexpy.CONFIG.ENABLE_HTTPS:
+    config = _get_config()
+    if config.ENABLE_HTTPS:
         scheme = 'https'
     else:
         scheme = 'http'
 
-    if hostname is None and plexpy.CONFIG.HTTP_HOST in ('0.0.0.0', '::'):
+    if hostname is None and config.HTTP_HOST in ('0.0.0.0', '::'):
         # Only returns IPv4 address
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -1145,10 +1159,10 @@ def get_plexpy_url(hostname=None):
 
         if not hostname:
             hostname = 'localhost'
-    elif hostname == 'localhost' and plexpy.CONFIG.HTTP_HOST not in ('0.0.0.0', '::'):
-        hostname = plexpy.CONFIG.HTTP_HOST
+    elif hostname == 'localhost' and config.HTTP_HOST not in ('0.0.0.0', '::'):
+        hostname = config.HTTP_HOST
     else:
-        hostname = hostname or plexpy.CONFIG.HTTP_HOST
+        hostname = hostname or config.HTTP_HOST
 
     if plexpy.HTTP_PORT not in (80, 443):
         port = ':' + str(plexpy.HTTP_PORT)
@@ -1698,28 +1712,30 @@ def check_watched(media_type, view_offset, duration, marker_credits_first=None, 
     view_offset = cast_to_int(view_offset)
     duration = cast_to_int(duration)
 
+    config = _get_config()
     watched_percent = {
-        'movie': plexpy.CONFIG.MOVIE_WATCHED_PERCENT,
-        'episode': plexpy.CONFIG.TV_WATCHED_PERCENT,
-        'track': plexpy.CONFIG.MUSIC_WATCHED_PERCENT,
-        'clip': plexpy.CONFIG.TV_WATCHED_PERCENT
+        'movie': config.MOVIE_WATCHED_PERCENT,
+        'episode': config.TV_WATCHED_PERCENT,
+        'track': config.MUSIC_WATCHED_PERCENT,
+        'clip': config.TV_WATCHED_PERCENT
     }
     threshold = watched_percent.get(media_type, 0) / 100 * duration
     if not threshold:
         return False
 
-    if plexpy.CONFIG.WATCHED_MARKER == 1 and marker_credits_final:
+    if config.WATCHED_MARKER == 1 and marker_credits_final:
         return view_offset >= marker_credits_final
-    elif plexpy.CONFIG.WATCHED_MARKER == 2 and marker_credits_first:
+    elif config.WATCHED_MARKER == 2 and marker_credits_first:
         return view_offset >= marker_credits_first
-    elif plexpy.CONFIG.WATCHED_MARKER == 3 and marker_credits_first:
+    elif config.WATCHED_MARKER == 3 and marker_credits_first:
         return view_offset >= min(threshold, marker_credits_first)
     else:
         return view_offset >= threshold
 
 
 def pms_name():
-    return plexpy.CONFIG.PMS_NAME_OVERRIDE or plexpy.CONFIG.PMS_NAME
+    config = _get_config()
+    return config.PMS_NAME_OVERRIDE or config.PMS_NAME
 
 
 def ip_type(ip: str) -> str:
@@ -1730,10 +1746,11 @@ def ip_type(ip: str) -> str:
 
 
 def get_ipv6_network_address(ip: str) -> str:
+    config = _get_config()
     cidr = "/64"
     cidr_pattern = re.compile(r'^/(1([0-1]\d|2[0-8]))$|^/(\d\d)$|^/[1-9]$')
-    if cidr_pattern.match(plexpy.CONFIG.NOTIFY_CONCURRENT_IPV6_CIDR):
-        cidr = plexpy.CONFIG.NOTIFY_CONCURRENT_IPV6_CIDR
+    if cidr_pattern.match(config.NOTIFY_CONCURRENT_IPV6_CIDR):
+        cidr = config.NOTIFY_CONCURRENT_IPV6_CIDR
     return str(ip_network(ip+cidr, strict=False).network_address)
 
 
