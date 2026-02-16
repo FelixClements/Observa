@@ -159,8 +159,12 @@
 - [x] Added datatable_query support to NewsletterLogRepository ✅ DONE (Feb 16, 2026)
 - [x] Added deprecation warnings to database.py ✅ DONE (Feb 16, 2026)
 - [x] Migrated users.py get_datatables_user_login to repository ✅ DONE (Feb 16, 2026)
+- [x] Migrated get_notification_log() to NotifyLogRepository ✅ DONE (Feb 16, 2026)
+- [x] Migrated get_newsletter_log() to NewsletterLogRepository ✅ DONE (Feb 16, 2026)
+- [x] Migrated get_total_duration() to SQLAlchemy ✅ DONE (Feb 16, 2026)
+- [x] Removed raw_pg.vacuum() calls from delete methods ✅ DONE (Feb 16, 2026)
 - [ ] `plexpy/db/datatables.py` → Use existing Repository.datatable_query() (partial - get_datatables_user_login done)
-- [ ] `plexpy/db/datafactory.py` → Migrate complex aggregation queries to repositories
+- [ ] `plexpy/db/datafactory.py` → Migrate complex aggregation queries (partial - 5 methods done, get_datatables_history pending)
 - [ ] `plexpy/db/database.py` → Advanced Alchemy
 - [ ] String-based SQL queries → ORM/Core
 
