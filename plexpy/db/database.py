@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from sqlalchemy import MetaData, Table, and_, insert, text
@@ -10,7 +11,40 @@ from plexpy.db.models import Base
 
 
 class MonitorDatabase(object):
+    """
+    DEPRECATED: This class is deprecated. Use repository classes instead.
+
+    Legacy database wrapper for raw SQL execution. This class provides
+    backwards compatibility but should not be used for new code.
+
+    Migration guide:
+    - Use plexpy.db.repository.users.UserRepository for user queries
+    - Use plexpy.db.repository.history.SessionHistoryRepository for history queries
+    - Use plexpy.db.repository.notifications.* for notification queries
+    - Use plexpy.db.repository.libraries.* for library queries
+
+    Example migration:
+        # Old (deprecated):
+        from plexpy.db.database import MonitorDatabase
+        db = MonitorDatabase()
+        db.select("SELECT * FROM users WHERE user_id = ?", [1])
+
+        # New (recommended):
+        from plexpy.db.repository.users import UserRepository
+        from plexpy.db.session import session_scope
+
+        with session_scope() as db_session:
+            repo = UserRepository(session=db_session)
+            user = repo.get(1)
+    """
+
+    _DEPRECATION_WARNING = (
+        "MonitorDatabase is deprecated. Use repository classes instead. "
+        "See plexpy.db.repository for available repositories."
+    )
+
     def __init__(self, engine: Optional[Engine] = None):
+        warnings.warn(self._DEPRECATION_WARNING, DeprecationWarning, stacklevel=2)
         self.engine = engine or get_engine()
         self._last_insert_id: Optional[int] = None
         self._tables: Dict[str, Table] = {}
